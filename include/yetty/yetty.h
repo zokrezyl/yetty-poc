@@ -2,11 +2,8 @@
 
 #include <memory>
 #include <yetty/base/base.h>
+#include <yetty/config.h>
 #include <yetty/result.hpp>
-
-#if defined(__ANDROID__)
-struct android_app;
-#endif
 
 namespace yetty {
 
@@ -18,11 +15,8 @@ public:
 
   ~Yetty() override = default;
 
-  static Result<Ptr> createImpl(ContextType &ctx, int argc, char *argv[]) noexcept;
-
-#if defined(__ANDROID__)
-  static Result<Ptr> createImpl(ContextType &ctx, struct android_app* app) noexcept;
-#endif
+  // Create Yetty with a fully initialized Config
+  static Result<Ptr> createImpl(ContextType &ctx, Config::Ptr config) noexcept;
 
   virtual Result<void> run() noexcept = 0;
 

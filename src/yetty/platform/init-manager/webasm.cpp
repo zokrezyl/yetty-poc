@@ -55,17 +55,23 @@ public:
         return Ok();
     }
 
-    void run(int argc, char** argv) override {
+    Result<void> run(int argc, char** argv) override {
         ydebug("WebInitManager: starting");
         _running = true;
 
-        // Create Yetty (single-threaded on webasm) - this creates EventLoop
-        auto result = Yetty::create(argc, argv);
-        if (!result) {
-            yerror("Failed to create Yetty: {}", error_msg(result));
-            return;
+        // Create Config first
+        auto configResult = Config::create(argc, argv);
+        if (!configResult) {
+            return Err<void>("Failed to create Config", configResult);
         }
-        _yettyInstance = *result;
+        auto config = *configResult;
+
+        // Create Yetty with Config
+        auto yettyResult = Yetty::create(config);
+        if (!yettyResult) {
+            return Err<void>("Failed to create Yetty", yettyResult);
+        }
+        _yettyInstance = *yettyResult;
         ydebug("Yetty created");
 
         // Register input callbacks BEFORE run() - yettyInstance->run() never returns on webasm
@@ -83,8 +89,9 @@ public:
         ydebug("WebInitManager: starting yetty->run() (will not return)");
         auto runResult = _yettyInstance->run();
         if (!runResult) {
-            yerror("Yetty run failed: {}", error_msg(runResult));
+            return Err<void>("Yetty run failed", runResult);
         }
+        return Ok();
     }
 
 private:

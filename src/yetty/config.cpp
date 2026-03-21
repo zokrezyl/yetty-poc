@@ -1,9 +1,12 @@
 #include "yetty/config.h"
 #include <ytrace/ytrace.hpp>
+#include <args.hxx>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <iostream>
+#include <cstdlib>
 
 #ifdef __linux__
 #include <unistd.h>
@@ -174,9 +177,8 @@ static YAML::Node valueToYaml(const Value& value) {
 
 class ConfigImpl : public Config {
 public:
-    ConfigImpl(const std::string& configPath, const YAML::Node& cmdOverrides) noexcept
-        : _configPath(configPath), _cmdOverrides(cmdOverrides) {
-        // Load defaults into the tree
+    ConfigImpl(int argc, char* argv[]) noexcept
+        : _argc(argc), _argv(argv) {
         loadDefaults();
     }
 
@@ -184,22 +186,22 @@ public:
 
     Result<void> init() noexcept {
         ydebug("Config::init starting...");
-        std::string effectivePath = _configPath;
+
+        // Step 1: Quick scan for -c/--config path
+        std::string configFilePath = scanForConfigPath();
+
+        // Step 2: Load config file (lowest priority)
 #if YETTY_WEB
-        // On web, skip config file loading - use defaults
-        ydebug("Config::init - web build, using defaults");
+        ydebug("Config::init - web build, skipping config file");
 #else
+        std::string effectivePath = configFilePath;
         if (effectivePath.empty()) {
-            ydebug("Config::init - checking XDG path...");
             auto xdgPath = getXDGConfigPath();
-            ydebug("Config::init - XDG path: {}", xdgPath.string());
             if (std::filesystem::exists(xdgPath)) {
                 effectivePath = xdgPath.string();
             }
         }
-
         if (!effectivePath.empty()) {
-            ydebug("Config::init - loading file: {}", effectivePath);
             if (auto res = loadFile(effectivePath); !res) {
                 ywarn("Failed to load config file {}: {}", effectivePath, error_msg(res));
             } else {
@@ -208,39 +210,170 @@ public:
         }
 #endif
 
-        ydebug("Config::init - applying env overrides...");
+        // Step 3: Apply env overrides (medium priority)
         applyEnvOverrides(_root, "");
 
-        if (_cmdOverrides && !_cmdOverrides.IsNull()) {
-            ydebug("Config::init - applying cmd overrides...");
-            yamlToConfigNode(_cmdOverrides, _root);
+        // Step 4: Parse and apply CLI args (highest priority)
+        if (auto res = parseAndApplyArgs(); !res) {
+            return res;
         }
 
-        ydebug("Config::init - checking plugin paths...");
+        // Ensure plugin paths
 #if YETTY_WEB
-        // Skip plugin paths on web - not needed
         std::vector<std::string> paths;
-        ydebug("Config::init - web build, skipping plugin paths");
 #else
         auto paths = pluginPaths();
-        ydebug("Config::init - got {} plugin paths", paths.size());
 #endif
         if (paths.empty()) {
-            ydebug("Config::init - getting default plugin paths...");
             auto defaults = getDefaultPluginPaths();
-            ydebug("Config::init - got {} default paths", defaults.size());
             std::string pathStr;
             for (size_t i = 0; i < defaults.size(); ++i) {
                 if (i > 0) pathStr += ":";
                 pathStr += defaults[i];
             }
-            ydebug("Config::init - setting plugins path: {}", pathStr);
-            _root.children["plugins"].values["path"] = Value(pathStr);
-            ydebug("Config::init - plugins path set");
+            set(DataPath("plugins/path"), Value(pathStr));
         }
 
         _initialized = true;
         ydebug("Config::init done");
+        return Ok();
+    }
+
+    std::string scanForConfigPath() {
+        if (_argc <= 0 || _argv == nullptr) return "";
+        for (int i = 1; i < _argc; ++i) {
+            std::string arg(_argv[i]);
+            if ((arg == "-c" || arg == "--config") && i + 1 < _argc) {
+                return _argv[i + 1];
+            }
+            if (arg.starts_with("-c=")) return arg.substr(3);
+            if (arg.starts_with("--config=")) return arg.substr(9);
+        }
+        return "";
+    }
+
+    Result<void> parseAndApplyArgs() {
+        if (_argc <= 0 || _argv == nullptr) return Ok();
+
+#if YETTY_WEB
+        // Web: read mode from JS-set env vars
+        if (const char* mode = getenv("YETTY_MODE")) {
+            if (std::string(mode) == "vnc") {
+                set(DataPath("vnc/client-mode"), Value(true));
+                if (const char* url = getenv("YETTY_VNC_CLIENT"); url && url[0]) {
+                    set(DataPath("vnc/host"), Value(std::string(url)));
+                }
+            } else if (std::string(mode) == "telnet") {
+                if (const char* url = getenv("YETTY_TELNET"); url && url[0]) {
+                    set(DataPath("shell/telnet"), Value(std::string(url)));
+                }
+            }
+        }
+#endif
+
+        args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
+        args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
+        args::ValueFlag<std::string> configFlag(parser, "FILE", "Config file path", {'c', "config"});
+        args::ValueFlag<std::string> executeFlag(parser, "COMMAND", "Execute command", {'e'});
+        args::ValueFlag<std::string> telnetFlag(parser, "HOST:PORT", "Connect via telnet", {"telnet"});
+        args::ValueFlag<std::string> msdfProviderFlag(parser, "PROVIDER", "MSDF provider (cpu/gpu)", {"msdf-provider"});
+        args::ValueFlag<std::string> vncClientFlag(parser, "HOST:PORT", "VNC client", {"vnc-client"});
+        args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server", {"vnc-server"});
+        args::ValueFlag<uint16_t> vncPortFlag(parser, "PORT", "VNC port", {"vnc-port"}, 5900);
+        args::Flag vncHeadlessFlag(parser, "vnc-headless", "VNC headless", {"vnc-headless"});
+        args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge rects", {"vnc-merge-rects"});
+        args::Flag vncRawFlag(parser, "vnc-raw", "Raw encoding", {"vnc-raw"});
+        args::ValueFlag<int> vncQualityFlag(parser, "Q", "JPEG quality", {"vnc-compression-quality"}, 0);
+        args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always full", {"vnc-always-full"});
+        args::Flag vncUseH264Flag(parser, "vnc-use-h264", "H.264", {"vnc-use-h264"});
+        args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test", {"vnc-test"});
+        args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Capture benchmark", {"capture-benchmark"});
+        args::Flag ytraceDefaultOnFlag(parser, "ytrace-default-on", "Enable all ytrace points", {"ytrace-default-on"});
+        args::ValueFlag<std::string> ytraceOutFlag(parser, "FILE", "ytrace output file", {"ytrace-out"});
+        args::ValueFlag<std::string> ytraceCtrlSocketFlag(parser, "PATH", "ytrace control socket", {"ytrace-ctrl-socket"});
+
+        try {
+            parser.ParseCLI(_argc, _argv);
+        } catch (const args::Help&) {
+            std::cout << parser;
+            std::exit(0);
+        } catch (const args::Error& e) {
+            yerror("Argument error: {}", e.what());
+            std::cerr << parser;
+            return Err<void>(e.what());
+        }
+
+        // Apply to tree
+        if (executeFlag) set(DataPath("shell/command"), Value(args::get(executeFlag)));
+        if (telnetFlag) {
+            std::string addr = args::get(telnetFlag);
+            set(DataPath("shell/telnet"), Value(addr.empty() ? "127.0.0.1:8023" : addr));
+        }
+        if (msdfProviderFlag) set(DataPath("rendering/msdf-provider"), Value(args::get(msdfProviderFlag)));
+
+        if (vncClientFlag) {
+            set(DataPath("vnc/client-mode"), Value(true));
+            std::string hp = args::get(vncClientFlag);
+            auto pos = hp.rfind(':');
+            if (pos != std::string::npos) {
+                set(DataPath("vnc/host"), Value(hp.substr(0, pos)));
+                set(DataPath("vnc/port"), Value(std::stoi(hp.substr(pos + 1))));
+            } else {
+                set(DataPath("vnc/host"), Value(hp));
+            }
+        }
+
+        if (vncServerFlag && vncHeadlessFlag) {
+            return Err<void>("--vnc-server and --vnc-headless are mutually exclusive");
+        }
+        if (vncServerFlag) {
+            set(DataPath("vnc/server-mode"), Value(true));
+            set(DataPath("vnc/server-port"), Value(static_cast<int>(args::get(vncPortFlag))));
+        }
+        if (vncHeadlessFlag) {
+            set(DataPath("vnc/server-mode"), Value(true));
+            set(DataPath("vnc/headless"), Value(true));
+            set(DataPath("vnc/server-port"), Value(static_cast<int>(args::get(vncPortFlag))));
+        }
+        if (vncMergeRectsFlag) set(DataPath("vnc/merge-rects"), Value(true));
+        if (vncRawFlag) set(DataPath("vnc/force-raw"), Value(true));
+        if (vncQualityFlag && args::get(vncQualityFlag) > 0) {
+            set(DataPath("vnc/compression-quality"), Value(std::min(args::get(vncQualityFlag), 100)));
+        }
+        if (vncAlwaysFullFlag) set(DataPath("vnc/always-full"), Value(true));
+        if (vncUseH264Flag) {
+            set(DataPath("vnc/use-h264"), Value(true));
+            set(DataPath("vnc/always-full"), Value(true));
+        }
+        if (vncTestFlag) {
+            set(DataPath("vnc/test-mode"), Value(true));
+            set(DataPath("vnc/server-mode"), Value(true));
+            std::string p = args::get(vncTestFlag);
+            set(DataPath("vnc/test-pattern"), Value(p));
+            std::string cmd;
+            if (p == "text") cmd = "bash -c 'frame=0; while true; do clear; echo \"=== VNC TEST ===\"; echo \"Frame: $((++frame))\"; seq 1 20 | xargs -I{} echo \"Line {}: ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; sleep 0.1; done'";
+            else if (p == "color") cmd = "bash -c 'while true; do clear; for fg in 30 31 32 33 34 35 36 37; do for bg in 40 41 42 43 44 45 46 47; do printf \"\\033[%d;%dm X \\033[0m\" $fg $bg; done; echo; done; sleep 1; done'";
+            else if (p == "scroll") cmd = "bash -c 'i=0; while true; do echo \"Line $((++i)): $(date)\"; sleep 0.05; done'";
+            else if (p == "stress") cmd = "bash -c 'while true; do head -c 1000 /dev/urandom | tr -dc A-Za-z0-9; echo; done'";
+            if (!cmd.empty()) set(DataPath("shell/command"), Value(cmd));
+        }
+        if (captureBenchmarkFlag) set(DataPath("debug/capture-benchmark"), Value(true));
+
+        // ytrace options - apply immediately
+        if (ytraceDefaultOnFlag) {
+            set(DataPath("ytrace/default-on"), Value(true));
+        }
+        if (ytraceOutFlag) {
+            set(DataPath("ytrace/output"), Value(args::get(ytraceOutFlag)));
+        }
+#ifndef YTRACE_NO_CONTROL_SOCKET
+        if (ytraceCtrlSocketFlag) {
+            std::string ctrlSocket = args::get(ytraceCtrlSocketFlag);
+            set(DataPath("ytrace/ctrl-socket"), Value(ctrlSocket));
+            ytrace::TraceManager::instance().open_ctrl_socket(ctrlSocket.c_str());
+        }
+#endif
+
         return Ok();
     }
 
@@ -568,16 +701,16 @@ private:
     }
 
     ConfigNode _root;
-    std::string _configPath;
-    YAML::Node _cmdOverrides;
-    mutable YAML::Node _yamlCache;  // Lazy cache for root() compatibility
+    int _argc = 0;
+    char** _argv = nullptr;
+    mutable YAML::Node _yamlCache;
     bool _initialized = false;
 };
 
 // Factory
 Result<Config::Ptr>
-Config::createImpl(ContextType&, const std::string& configPath, const YAML::Node& cmdOverrides) noexcept {
-    auto impl = Ptr(new ConfigImpl(configPath, cmdOverrides));
+Config::createImpl(ContextType&, int argc, char* argv[]) noexcept {
+    auto impl = Ptr(new ConfigImpl(argc, argv));
     if (auto res = static_cast<ConfigImpl*>(impl.get())->init(); !res) {
         yerror("Config creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to initialize Config", res);

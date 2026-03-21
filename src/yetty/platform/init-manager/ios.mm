@@ -225,10 +225,15 @@ static yetty::Yetty::Ptr g_yetty = nullptr;
         setenv("YETTY_SSH_KEY", [keyPath UTF8String], 1);
     }
 
-    int fakeArgc = 1;
-    const char* fakeArgv[] = {"yetty", nullptr};
+    // Create Config (env vars handled automatically)
+    auto configResult = yetty::Config::create(0, nullptr);
+    if (!configResult) {
+        yerror("iOS: Failed to create Config: {}", configResult.error().message());
+        return;
+    }
+    auto config = *configResult;
 
-    auto result = yetty::Yetty::create(fakeArgc, const_cast<char**>(fakeArgv));
+    auto result = yetty::Yetty::create(config);
     if (!result) {
         yerror("iOS: Failed to initialize Yetty: {}", result.error().message());
 
@@ -292,7 +297,7 @@ public:
         return Ok();
     }
 
-    void run(int argc, char** argv) override {
+    Result<void> run(int argc, char** argv) override {
         (void)argc; (void)argv;  // iOS ignores argc/argv - UIApplicationMain handles everything
 
         ydebug("IosInitManager::run - starting UIApplicationMain");
@@ -306,6 +311,7 @@ public:
             char* fakeArgv[] = {(char*)"yetty", nullptr};
             UIApplicationMain(fakeArgc, fakeArgv, nil, NSStringFromClass([YettyAppDelegate class]));
         }
+        return Ok();  // Never reached
     }
 };
 
@@ -320,19 +326,5 @@ Result<InitManager::Ptr> InitManager::createImpl() {
 }
 
 } // namespace yetty
-
-// =============================================================================
-// iOS main entry point
-// =============================================================================
-extern "C" int main(int argc, char* argv[]) {
-    auto initResult = yetty::InitManager::create();
-    if (!initResult) {
-        NSLog(@"Yetty: Failed to create InitManager");
-        return 1;
-    }
-
-    (*initResult)->run(argc, argv);
-    return 0;
-}
 
 #endif // YETTY_IOS

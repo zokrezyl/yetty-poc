@@ -85,7 +85,10 @@ void android_main(android_app* app) {
     }
     auto initManager = *initResult;
 
-    initManager->run();
+    auto runResult = initManager->run();
+    if (!runResult) {
+        yerror("Run failed: {}", yetty::error_msg(runResult));
+    }
 
     ydebug("android_main exiting");
 }
@@ -106,14 +109,18 @@ int main(int argc, char* argv[]) {
     }
     auto initManager = *initResult;
 
-    initManager->run(argc, argv);
+    auto runResult = initManager->run(argc, argv);
+    if (!runResult) {
+        yerror("Run failed: {}", yetty::error_msg(runResult));
+        return 1;
+    }
 
     return 0;
 }
 
 #else
 //-----------------------------------------------------------------------------
-// Desktop Entry Point (Linux/macOS/Windows)
+// Desktop/iOS Entry Point (Linux/macOS/Windows/iOS)
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
     setup_logging(argc, argv);
@@ -129,7 +136,12 @@ int main(int argc, char* argv[]) {
     }
     auto initManager = *initResult;
 
-    initManager->run(argc, argv);
+    auto runResult = initManager->run(argc, argv);
+    if (!runResult) {
+        yerror("Run failed: {}", yetty::error_msg(runResult));
+        std::cerr << "ERROR: " << yetty::error_msg(runResult) << std::endl;
+        return 1;
+    }
 
     ydebug("Main thread: InitManager::run() returned");
     return 0;

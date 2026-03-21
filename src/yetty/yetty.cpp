@@ -34,7 +34,6 @@
 #include <csignal>
 #include <cstring>
 #include <ytrace/ytrace.hpp>
-#include <args.hxx>
 #include <turbojpeg.h>
 #include "vnc/vnc-client.h"
 #include "vnc/vnc-server.h"
@@ -57,7 +56,7 @@ public:
     YettyImpl() = default;
     ~YettyImpl() override = default;
 
-    Result<void> init(int argc, char* argv[]) noexcept;
+    Result<void> init(Config::Ptr config) noexcept;
     Result<void> run() noexcept override;
     Result<void> iterate() noexcept override;
     Result<bool> onEvent(const base::Event& event) override;
@@ -66,7 +65,6 @@ protected:
     Result<void> onShutdown() override;
 
 private:
-    Result<void> parseArgs(int argc, char* argv[]) noexcept;
     Result<void> initEmbeddedAssets() noexcept;
     Result<void> initWindow() noexcept;
     Result<void> initWebGPU() noexcept;
@@ -236,93 +234,53 @@ YettyImpl* YettyImpl::s_instance = nullptr;
 // Factory
 //=============================================================================
 
-Result<Yetty::Ptr> Yetty::createImpl(ContextType&, int argc, char* argv[]) noexcept {
+Result<Yetty::Ptr> Yetty::createImpl(ContextType&, Config::Ptr config) noexcept {
     auto impl = Ptr(new YettyImpl());
-    if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv); !res) {
+    if (auto res = static_cast<YettyImpl*>(impl.get())->init(config); !res) {
         yerror("Yetty creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to init Yetty", res);
     }
     ytest("yetty-created", "Yetty created successfully");
     return Ok(std::move(impl));
 }
-
-#if defined(__ANDROID__)
-Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noexcept {
-    (void)app;
-    auto impl = Ptr(new YettyImpl());
-
-    // Check for VNC mode via environment variable
-    // Set YETTY_VNC_HEADLESS=1 and optionally YETTY_VNC_PORT=5900
-    const char* vncHeadless = getenv("YETTY_VNC_HEADLESS");
-    const char* vncPort = getenv("YETTY_VNC_PORT");
-
-    int argc = 1;
-    std::vector<const char*> argv_vec = {"yetty"};
-
-    if (vncHeadless && std::string(vncHeadless) == "1") {
-        argv_vec.push_back("--vnc-headless");
-        argc++;
-        if (vncPort) {
-            argv_vec.push_back("--vnc-port");
-            argv_vec.push_back(vncPort);
-            argc += 2;
-        }
-    }
-
-    std::vector<char*> argv_ptrs;
-    for (const char* arg : argv_vec) {
-        argv_ptrs.push_back(const_cast<char*>(arg));
-    }
-
-    if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv_ptrs.data()); !res) {
-        yerror("Yetty creation failed: {}", error_msg(res));
-        return Err<Ptr>("Failed to init Yetty", res);
-    }
-    ytest("yetty-created", "Yetty created successfully");
-    return Ok(std::move(impl));
-}
-#endif
 
 //=============================================================================
 // Initialization
 //=============================================================================
 
-Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
+Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     ydebug("Yetty starting...");
 
-    ydebug("init: parseArgs");
-    if (auto res = parseArgs(argc, argv); !res) return res;
+    // Store config
+    _yettyContext.config = config;
+
+    // Read settings from config
+    _vncClientMode = config->get<bool>("vnc/client-mode", false);
+    _vncServerMode = config->get<bool>("vnc/server-mode", false);
+    _vncHeadless = config->get<bool>("vnc/headless", false);
+    _vncHost = config->get<std::string>("vnc/host", "");
+    _vncPort = static_cast<uint16_t>(config->get<int>("vnc/port", 5900));
+    _vncServerPort = static_cast<uint16_t>(config->get<int>("vnc/server-port", 5900));
+    _vncMergeRects = config->get<bool>("vnc/merge-rects", false);
+    _vncForceRaw = config->get<bool>("vnc/force-raw", false);
+    _vncCompressionQuality = static_cast<uint8_t>(config->get<int>("vnc/compression-quality", 0));
+    _vncAlwaysFull = config->get<bool>("vnc/always-full", false);
+    _vncUseH264 = config->get<bool>("vnc/use-h264", false);
+    _vncTestMode = config->get<bool>("vnc/test-mode", false);
+    _vncTestPattern = config->get<std::string>("vnc/test-pattern", "text");
+    _captureBenchmark = config->get<bool>("debug/capture-benchmark", false);
+    _msdfProviderName = config->get<std::string>("rendering/msdf-provider", "gpu");
+    _executeCommand = config->get<std::string>("shell/command", "");
+    _telnetAddress = config->get<std::string>("shell/telnet", "");
+    _telnetClientMode = !_telnetAddress.empty();
 
     ydebug("init: initWindow");
     if (auto res = initWindow(); !res) { ydebug("init: initWindow FAILED"); return res; }
 
-    // Extract embedded assets if needed (first run or version upgrade)
-    // This MUST happen before Config::create so default config is available
+    // Extract embedded assets if needed
     ydebug("init: initEmbeddedAssets");
     if (auto res = initEmbeddedAssets(); !res) {
         ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
-    }
-
-    // Create Config after embedded assets are extracted (default config available)
-    ydebug("init: Config::create");
-    auto configResult = Config::create();
-    if (!configResult) {
-        ydebug("init: Config::create FAILED");
-        return Err<void>("Failed to create Config", configResult);
-    }
-    _yettyContext.config = *configResult;
-    ydebug("init: Config created");
-
-    // Set shell/command from -c/-e flag if specified
-    if (!_executeCommand.empty()) {
-        _yettyContext.config->setString("shell/command", _executeCommand);
-        ydebug("Set shell/command in config: {}", _executeCommand);
-    }
-
-    // Set telnet address if specified
-    if (!_telnetAddress.empty()) {
-        _yettyContext.config->setString("shell/telnet", _telnetAddress);
-        ydebug("Set shell/telnet in config: {}", _telnetAddress);
     }
 
     // Get EventQueue for thread-safe GPU callback wakeups
@@ -761,203 +719,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
         };
     }
-
-    return Ok();
-}
-
-Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-#if YETTY_WEB
-    // Web builds: read mode from environment variables set by JavaScript
-    // This MUST be done before the early return below!
-    // YETTY_MODE: jslinux, vnc, telnet
-    // YETTY_VNC_CLIENT: ws://host:port (WebSocket URL for VNC)
-    // YETTY_TELNET: ws://host:port (WebSocket URL for telnet)
-    const char* modeEnv = getenv("YETTY_MODE");
-    if (modeEnv) {
-        std::string mode(modeEnv);
-        ydebug("Web mode: {}", mode);
-
-        if (mode == "vnc") {
-            const char* vncClientEnv = getenv("YETTY_VNC_CLIENT");
-            if (vncClientEnv && vncClientEnv[0] != '\0') {
-                _vncClientMode = true;
-                // For WebSocket URLs, store the full URL as host (VncClient handles ws:// URLs)
-                _vncHost = vncClientEnv;
-                _vncPort = 0;  // Port embedded in URL
-                ydebug("VNC client mode (WebSocket): {}", _vncHost);
-            } else {
-                // Mode is VNC but no URL - still set the flag to prevent VM startup
-                _vncClientMode = true;
-                ydebug("VNC client mode enabled (no URL yet)");
-            }
-        } else if (mode == "telnet") {
-            const char* telnetEnv = getenv("YETTY_TELNET");
-            if (telnetEnv && telnetEnv[0] != '\0') {
-                _telnetClientMode = true;
-                _telnetAddress = telnetEnv;
-                ydebug("Telnet client mode (WebSocket): {}", _telnetAddress);
-            } else {
-                // Mode is telnet but no URL - still set the flag to prevent VM startup
-                _telnetClientMode = true;
-                ydebug("Telnet client mode enabled (no URL yet)");
-            }
-        }
-        // mode == "jslinux" is the default, no special handling needed
-    }
-#endif
-
-    // Skip argument parsing if no args (e.g., Android NativeActivity, Emscripten)
-    if (argc <= 0 || argv == nullptr) {
-        return Ok();
-    }
-
-    args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
-
-    args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
-    args::ValueFlag<std::string> executeFlag(parser, "COMMAND", "Execute command", {'e', 'c'});
-    args::ValueFlag<std::string> msdfProviderFlag(parser, "PROVIDER", "MSDF provider (cpu/gpu)", {"msdf-provider"});
-    args::ValueFlag<std::string> telnetFlag(parser, "HOST:PORT", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
-    args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
-    args::ValueFlag<std::string> vncClientFlag(parser, "HOST:PORT", "Connect as VNC client", {"vnc-client"});
-    args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
-    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "PORT", "VNC server port (default 5900)", {"vnc-port"}, 5900);
-    args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
-    args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
-    args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
-    args::ValueFlag<int> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80); on server sets default, on client overrides server", {"vnc-compression-quality"}, 0);
-    args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
-    args::Flag vncUseH264Flag(parser, "vnc-use-h264", "Use H.264 encoding instead of JPEG (implies --vnc-always-full) - client-side", {"vnc-use-h264"});
-    args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
-
-    // ytrace options
-    args::Flag ytraceDefaultOnFlag(parser, "ytrace-default-on", "Enable all ytrace points by default", {"ytrace-default-on"});
-    args::ValueFlag<std::string> ytraceOutFlag(parser, "FILE", "ytrace output file (- for stderr)", {"ytrace-out"});
-    args::ValueFlag<std::string> ytraceCtrlSocketFlag(parser, "PATH", "ytrace control socket path", {"ytrace-ctrl-socket"});
-
-    try {
-        parser.ParseCLI(argc, argv);
-    } catch (const args::Help&) {
-        std::cout << parser;
-        std::exit(0);
-    } catch (const args::Error& e) {
-        yerror("Argument error: {}", e.what());
-        std::cerr << parser;
-        return Err<void>(e.what());
-    }
-
-    if (executeFlag) {
-        _executeCommand = args::get(executeFlag);
-        ydebug("Execute command: {}", _executeCommand);
-    }
-
-    if (msdfProviderFlag) {
-        _msdfProviderName = args::get(msdfProviderFlag);
-        ydebug("MSDF provider: {}", _msdfProviderName);
-    }
-
-    if (captureBenchmarkFlag) {
-        _captureBenchmark = true;
-        ydebug("Capture benchmark mode enabled");
-    }
-
-    if (telnetFlag) {
-        _telnetAddress = args::get(telnetFlag);
-        if (_telnetAddress.empty()) {
-            _telnetAddress = "127.0.0.1:8023";  // Default for Termux telnetd
-        }
-        ydebug("Telnet mode: connecting to {}", _telnetAddress);
-    }
-
-    if (vncClientFlag) {
-        _vncClientMode = true;
-        std::string hostPort = args::get(vncClientFlag);
-        auto colonPos = hostPort.rfind(':');
-        if (colonPos != std::string::npos) {
-            _vncHost = hostPort.substr(0, colonPos);
-            _vncPort = static_cast<uint16_t>(std::stoi(hostPort.substr(colonPos + 1)));
-        } else {
-            _vncHost = hostPort;
-        }
-        ydebug("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
-    }
-
-    // --vnc-server and --vnc-headless are mutually exclusive
-    // --vnc-server: VNC server with local window
-    // --vnc-headless: VNC server without window (headless)
-    if (vncServerFlag && vncHeadlessFlag) {
-        return Err<void>("--vnc-server and --vnc-headless are mutually exclusive");
-    }
-
-    if (vncServerFlag) {
-        _vncServerMode = true;
-        _vncServerPort = args::get(vncServerPortFlag);
-        ydebug("VNC server mode: port {}", _vncServerPort);
-    }
-
-    if (vncHeadlessFlag) {
-        _vncServerMode = true;  // Headless implies server mode
-        _vncHeadless = true;
-        _vncServerPort = args::get(vncServerPortFlag);
-        ydebug("VNC headless server mode: port {} (no local window)", _vncServerPort);
-    }
-
-    if (vncMergeRectsFlag) {
-        _vncMergeRects = true;
-        ydebug("VNC rectangle merging enabled");
-    }
-
-    if (vncRawFlag) {
-        _vncForceRaw = true;
-        ydebug("VNC raw encoding enabled (no JPEG compression)");
-    }
-
-    if (vncQualityFlag && args::get(vncQualityFlag) > 0) {
-        int quality = args::get(vncQualityFlag);
-        _vncCompressionQuality = static_cast<uint8_t>(std::min(quality, 100));
-        ydebug("VNC compression quality set to {}", _vncCompressionQuality);
-    }
-
-    if (vncAlwaysFullFlag) {
-        _vncAlwaysFull = true;
-        ydebug("VNC always full frame mode enabled (no delta encoding)");
-    }
-
-    if (vncUseH264Flag) {
-        _vncUseH264 = true;
-        _vncAlwaysFull = true;  // H.264 requires full frame mode
-        yinfo("VNC H.264 encoding enabled (implies always-full)");
-    }
-
-    if (vncTestFlag) {
-        _vncTestMode = true;
-        _vncTestPattern = args::get(vncTestFlag);
-        _vncServerMode = true;  // Test mode implies server mode
-        ydebug("VNC test mode: pattern={}", _vncTestPattern);
-
-        // Set execute command for test patterns
-        if (_vncTestPattern == "text") {
-            // Scrolling text test - shows consistent readable content
-            _executeCommand = "bash -c 'frame=0; while true; do clear; echo \"=== VNC TEST: TEXT ===\"; echo \"Frame: $((++frame))\"; for i in $(seq 1 20); do echo \"Line $i: ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz\"; done; date; sleep 0.1; done'";
-        } else if (_vncTestPattern == "color") {
-            // Color test - shows ANSI colors
-            _executeCommand = "bash -c 'while true; do clear; echo \"=== VNC TEST: COLOR ===\"; for fg in 30 31 32 33 34 35 36 37; do for bg in 40 41 42 43 44 45 46 47; do printf \"\\033[%d;%dm X \\033[0m\" $fg $bg; done; echo; done; sleep 1; done'";
-        } else if (_vncTestPattern == "scroll") {
-            // Scroll test - continuous scrolling
-            _executeCommand = "bash -c 'i=0; while true; do echo \"Line $((++i)): $(date) - The quick brown fox jumps over the lazy dog\"; sleep 0.05; done'";
-        } else if (_vncTestPattern == "stress") {
-            // Stress test - maximum output
-            _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
-        }
-    }
-
-    // Handle ytrace control socket (not available on Emscripten)
-#ifndef YTRACE_NO_CONTROL_SOCKET
-    if (ytraceCtrlSocketFlag) {
-        std::string ctrlSocket = args::get(ytraceCtrlSocketFlag);
-        ytrace::TraceManager::instance().open_ctrl_socket(ctrlSocket.c_str());
-        ydebug("ytrace control socket: {}", ctrlSocket);
-    }
-#endif
 
     return Ok();
 }
