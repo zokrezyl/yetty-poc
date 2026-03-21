@@ -4,7 +4,7 @@
 
 # Yetty - Next-Generation Terminal Emulator
 
-> **License Change:** Yetty has moved from MIT to **AGPL-3.0 / dual license**. As the project grows and depending on adoption and where things go, we want to keep our options open while ensuring Yetty remains fully open source — a commercial license may be offered in the future for proprietary use.
+> **License:** Yetty uses the **Business Source License 1.1 (BSL 1.1)**. Non-production use is free; production use requires a commercial license. See [LICENSE](LICENSE) for details.
 
 A WebGPU-powered terminal emulator that breaks the boundaries of what terminals can display.
 
@@ -158,11 +158,11 @@ SHELL=/bin/zsh ./yetty
 
 ## License
 
-Yetty is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** with a dual-licensing option — see [LICENSE](LICENSE) for details.
+Yetty is licensed under the **Business Source License 1.1 (BSL 1.1)**. You may copy, modify, and create derivative works for non-production use. Production use requires a commercial license. See [LICENSE](LICENSE) for full terms.
 
 ### Dependencies
 
-All dependencies use AGPL-compatible permissive licenses (MIT, BSD, Zlib, Apache-2.0). See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete list.
+All dependencies use permissive licenses (MIT, BSD, Zlib, Apache-2.0). See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete list.
 
 ---
 
