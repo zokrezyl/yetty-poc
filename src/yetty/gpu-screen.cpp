@@ -4012,10 +4012,12 @@ void GPUScreenImpl::handleYpaintOSC(const std::string &payload, bool scrolling) 
     return;
   }
 
-  // Handle append mode
-  bool append = args.find("--append") != std::string::npos;
-  if (!append) {
-    painter->clear();
+  // Handle append mode (only for overlay - scrolling mode is always append)
+  if (!scrolling) {
+    bool append = args.find("--append") != std::string::npos;
+    if (!append) {
+      painter->clear();
+    }
   }
 
   // Parse YAML payload
@@ -4067,12 +4069,15 @@ void GPUScreenImpl::handleYpaintOSC(const std::string &payload, bool scrolling) 
            painter->primitiveCount(), painter->glyphCount());
 
     // Update GPU buffers - call lifecycle methods
+    // Must follow: declareBufferNeeds -> commitReservations -> allocateBuffers -> writeBuffers
     if (auto res = painter->declareBufferNeeds(); !res) {
       yerror("handleYpaintOSC: declareBufferNeeds failed: {}", error_msg(res));
-    } else if (auto res2 = painter->allocateBuffers(); !res2) {
-      yerror("handleYpaintOSC: allocateBuffers failed: {}", error_msg(res2));
-    } else if (auto res3 = painter->writeBuffers(); !res3) {
-      yerror("handleYpaintOSC: writeBuffers failed: {}", error_msg(res3));
+    } else if (auto res2 = _cardManager->bufferManager()->commitReservations(); !res2) {
+      yerror("handleYpaintOSC: commitReservations failed: {}", error_msg(res2));
+    } else if (auto res3 = painter->allocateBuffers(); !res3) {
+      yerror("handleYpaintOSC: allocateBuffers failed: {}", error_msg(res3));
+    } else if (auto res4 = painter->writeBuffers(); !res4) {
+      yerror("handleYpaintOSC: writeBuffers failed: {}", error_msg(res4));
     } else {
       ydebug("handleYpaintOSC: GPU buffers updated successfully");
     }

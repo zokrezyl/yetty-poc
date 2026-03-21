@@ -192,11 +192,14 @@ Note: 666667-669 are used for shader effects, 666670 for GPU stats,
 666671 for FPS control, 666673 for ScreenDrawLayer (deprecated).
 
 ```bash
-# Draw to scrolling layer (scrolls with terminal)
+# Draw to scrolling layer (always appends - content accumulates and scrolls off)
 printf '\033]666674;--yaml;%s\033\\' "$base64_data"
 
-# Draw to overlay layer (fixed position)
+# Draw to overlay layer (replaces previous content by default)
 printf '\033]666675;--yaml;%s\033\\' "$base64_data"
+
+# Draw to overlay layer (appends to existing content)
+printf '\033]666675;--append;--yaml;%s\033\\' "$base64_data"
 
 # Clear scrolling layer
 printf '\033]666674;--clear\033\\'
@@ -204,6 +207,10 @@ printf '\033]666674;--clear\033\\'
 # Clear overlay layer
 printf '\033]666675;--clear\033\\'
 ```
+
+**Note:** Scrolling mode is ALWAYS append - content accumulates like terminal text
+and only disappears when it scrolls off the top. Overlay mode defaults to replace
+but supports `--append` to accumulate content.
 
 ### Why GpuMemoryManager?
 

@@ -7,40 +7,41 @@ cd "$DIR/../../../.."
 
 YAML_PAYLOAD=$(cat <<'EOF'
 # Simple flowchart diagram for scrolling layer
+# Y coordinates are LOCAL (relative to line), starting from 0
 background: "#00000000"
 
 body:
   # Title
   - text:
-      position: [50, 20]
+      position: [50, 0]
       content: "Process Flow"
       font-size: 22
       color: "#ffffff"
 
   # Start node
   - circle:
-      position: [100, 70]
+      position: [100, 50]
       radius: 30
       fill: "#2ecc71"
       stroke: "#27ae60"
       stroke-width: 2
 
   - text:
-      position: [80, 78]
+      position: [80, 58]
       content: "Start"
       font-size: 14
       color: "#ffffff"
 
   # Arrow 1
   - segment:
-      from: [130, 70]
-      to: [170, 70]
+      from: [130, 50]
+      to: [170, 50]
       stroke: "#7f8c8d"
       stroke-width: 2
 
   # Process 1
   - box:
-      position: [220, 70]
+      position: [220, 50]
       size: [100, 50]
       fill: "#3498db"
       stroke: "#2980b9"
@@ -48,21 +49,21 @@ body:
       round: 6
 
   - text:
-      position: [230, 78]
+      position: [230, 58]
       content: "Process A"
       font-size: 14
       color: "#ffffff"
 
   # Arrow 2
   - segment:
-      from: [320, 70]
-      to: [360, 70]
+      from: [320, 50]
+      to: [360, 50]
       stroke: "#7f8c8d"
       stroke-width: 2
 
   # Process 2
   - box:
-      position: [410, 70]
+      position: [410, 50]
       size: [100, 50]
       fill: "#9b59b6"
       stroke: "#8e44ad"
@@ -70,28 +71,28 @@ body:
       round: 6
 
   - text:
-      position: [420, 78]
+      position: [420, 58]
       content: "Process B"
       font-size: 14
       color: "#ffffff"
 
   # Arrow 3
   - segment:
-      from: [510, 70]
-      to: [550, 70]
+      from: [510, 50]
+      to: [550, 50]
       stroke: "#7f8c8d"
       stroke-width: 2
 
   # End node
   - circle:
-      position: [590, 70]
+      position: [590, 50]
       radius: 30
       fill: "#e74c3c"
       stroke: "#c0392b"
       stroke-width: 2
 
   - text:
-      position: [575, 78]
+      position: [575, 58]
       content: "End"
       font-size: 14
       color: "#ffffff"
