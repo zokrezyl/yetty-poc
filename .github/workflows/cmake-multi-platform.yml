@@ -19,7 +19,7 @@ env:
   BUILD_WINDOWS: false
   BUILD_ANDROID: false
   BUILD_ANDROID_X86_64: false
-  BUILD_IOS: false
+  BUILD_IOS: true
   BUILD_IOS_X86_64: true
   BUILD_WEB: false
 
