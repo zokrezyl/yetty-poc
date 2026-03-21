@@ -161,8 +161,10 @@ private:
     double _lastFpsTime = 0.0;
     uint32_t _frameCount = 0;
 
-    // RPC server
+    // RPC server (desktop only)
+#if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     rpc::RpcServer::Ptr _rpcServer;
+#endif
 
     // Command line options
     std::string _executeCommand;
@@ -388,7 +390,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     _yettyContext.surfaceManager = _surfaceManager;
     _yettyContext.fsPathManager = _fsPathManager;
     // PtyManager will be obtained via ::instance() when needed
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
 #endif
     _yettyContext.shaderManager = shaderMgr;
@@ -427,7 +429,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 
     initEventLoop();
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     // Create RPC server and write socket path to config BEFORE workspace/terminal
     // (Terminal reads shell/env from config when forking the shell)
     if (_yettyContext.config->get<bool>("rpc/enabled", true)) {
@@ -456,7 +458,7 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         ydebug("init: initWorkspace done");
     }
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     // Register workspace handlers now that workspace exists
     if (_rpcServer) {
         if (_activeWorkspace) {
@@ -1861,7 +1863,7 @@ Result<void> YettyImpl::onShutdown() {
         _vncServer.reset();
     }
 
-#if !YETTY_WEB && !defined(__ANDROID__)
+#if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     if (_rpcServer) {
         _rpcServer->stop();
         _rpcServer.reset();

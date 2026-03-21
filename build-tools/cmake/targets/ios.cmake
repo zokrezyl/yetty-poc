@@ -12,9 +12,13 @@ file(MAKE_DIRECTORY ${IOS_ASSETS_DIR})
 # Add src/yetty (builds libraries, VNC included since YETTY_ANDROID=0)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
+# Filter out main.cpp from YETTY_CORE_SOURCES (iOS has its own entry point in ios.mm)
+set(YETTY_IOS_CORE_SOURCES ${YETTY_CORE_SOURCES})
+list(FILTER YETTY_IOS_CORE_SOURCES EXCLUDE REGEX "main\\.cpp$")
+
 # Create iOS app bundle (executable, not library)
 add_executable(yetty MACOSX_BUNDLE
-    ${YETTY_CORE_SOURCES}
+    ${YETTY_IOS_CORE_SOURCES}
     ${YETTY_IOS_SOURCES}
     # Platform abstraction sources for iOS
     ${YETTY_ROOT}/src/yetty/platform/init-manager/ios.mm
@@ -48,6 +52,7 @@ target_compile_definitions(yetty PRIVATE
     YETTY_USE_CORETEXT=1
     YETTY_USE_FORKPTY=0
     YETTY_HAS_VNC=1
+    YETTY_HAS_YVIDEO=1
 )
 
 # iOS app bundle properties
@@ -78,6 +83,7 @@ target_link_libraries(yetty PRIVATE
     lz4_static
     uv_a
     yetty_vnc
+    yetty_yvideo
     turbojpeg-static
     ${CORETEXT_LIBRARY}
     ${COREFOUNDATION_LIBRARY}

@@ -23,8 +23,8 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/msdfgen.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/thorvg.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
-# yvideo dependencies (dav1d, openh264, minimp4) - not available on iOS/Emscripten
-if(NOT EMSCRIPTEN AND NOT YETTY_IOS)
+# yvideo dependencies (dav1d, openh264, minimp4) - not available on Emscripten
+if(NOT EMSCRIPTEN)
     include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
     include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
     include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)

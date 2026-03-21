@@ -95,6 +95,47 @@ endian = 'little'
         set(DAV1D_CROSS_ARGS --cross-file ${DAV1D_CROSS_FILE})
         # Disable ASM for WebAssembly
         set(DAV1D_EXTRA_ARGS -Denable_asm=false)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS cross-compilation
+        if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+            set(DAV1D_CPU "aarch64")
+            set(DAV1D_CPU_FAMILY "aarch64")
+        elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+            set(DAV1D_CPU "x86_64")
+            set(DAV1D_CPU_FAMILY "x86_64")
+        endif()
+
+        # Determine iOS platform type for -m flag
+        if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator" OR CMAKE_OSX_SYSROOT MATCHES "Simulator")
+            set(DAV1D_IOS_VERSION_FLAG "-mios-simulator-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        else()
+            set(DAV1D_IOS_VERSION_FLAG "-miphoneos-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        endif()
+
+        # Generate meson cross file for iOS
+        set(DAV1D_CROSS_FILE "${CMAKE_BINARY_DIR}/_deps/dav1d-ios-cross.txt")
+        file(WRITE ${DAV1D_CROSS_FILE}
+"[binaries]
+c = '/usr/bin/clang'
+cpp = '/usr/bin/clang++'
+ar = '/usr/bin/ar'
+strip = '/usr/bin/strip'
+
+[built-in options]
+c_args = ['-arch', '${CMAKE_OSX_ARCHITECTURES}', '-isysroot', '${CMAKE_OSX_SYSROOT}', '${DAV1D_IOS_VERSION_FLAG}']
+c_link_args = ['-arch', '${CMAKE_OSX_ARCHITECTURES}', '-isysroot', '${CMAKE_OSX_SYSROOT}']
+cpp_args = ['-arch', '${CMAKE_OSX_ARCHITECTURES}', '-isysroot', '${CMAKE_OSX_SYSROOT}', '${DAV1D_IOS_VERSION_FLAG}']
+cpp_link_args = ['-arch', '${CMAKE_OSX_ARCHITECTURES}', '-isysroot', '${CMAKE_OSX_SYSROOT}']
+
+[host_machine]
+system = 'darwin'
+cpu_family = '${DAV1D_CPU_FAMILY}'
+cpu = '${DAV1D_CPU}'
+endian = 'little'
+")
+        set(DAV1D_CROSS_ARGS --cross-file ${DAV1D_CROSS_FILE})
+        # Disable ASM for iOS (meson NASM integration problematic with cross-compilation)
+        set(DAV1D_EXTRA_ARGS -Denable_asm=false)
     elseif(WIN32)
         # Windows: use native file to ensure MSVC is used
         set(DAV1D_CROSS_FILE "${CMAKE_BINARY_DIR}/_deps/dav1d-windows-native.txt")
@@ -113,6 +154,16 @@ cpp_args = []
     else()
         set(DAV1D_CROSS_ARGS "")
         set(DAV1D_EXTRA_ARGS "")
+    endif()
+
+    # iOS needs archive fix after install (meson uses GNU ar which creates incompatible archives)
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(DAV1D_INSTALL_COMMAND
+            ninja -C ${DAV1D_BUILD_DIR} install
+            COMMAND sh -c "xcrun libtool -static -o ${DAV1D_INSTALL_DIR}/lib/libdav1d_fixed.a ${DAV1D_BUILD_DIR}/src/libdav1d.a.p/*.o ${DAV1D_BUILD_DIR}/src/libdav1d_bitdepth_8.a.p/*.o ${DAV1D_BUILD_DIR}/src/libdav1d_bitdepth_16.a.p/*.o && mv ${DAV1D_INSTALL_DIR}/lib/libdav1d_fixed.a ${DAV1D_INSTALL_DIR}/lib/libdav1d.a"
+        )
+    else()
+        set(DAV1D_INSTALL_COMMAND ninja -C ${DAV1D_BUILD_DIR} install)
     endif()
 
     # Build dav1d using meson + ninja
@@ -136,7 +187,7 @@ cpp_args = []
             ${DAV1D_CROSS_ARGS}
 
         BUILD_COMMAND ninja -C ${DAV1D_BUILD_DIR} -j${NPROC}
-        INSTALL_COMMAND ninja -C ${DAV1D_BUILD_DIR} install
+        INSTALL_COMMAND ${DAV1D_INSTALL_COMMAND}
 
         BUILD_BYPRODUCTS
             ${DAV1D_INSTALL_DIR}/lib/${DAV1D_LIB_NAME}

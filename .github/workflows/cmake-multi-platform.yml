@@ -9,6 +9,7 @@ on:
     branches:
       - '**'
 
+
 # =============================================================================
 # BUILD FLAGS - Set to true to enable specific builds (tags always build all)
 # =============================================================================
@@ -18,7 +19,7 @@ env:
   BUILD_WINDOWS: false
   BUILD_ANDROID: false
   BUILD_ANDROID_X86_64: false
-  BUILD_IOS: true
+  BUILD_IOS: false
   BUILD_IOS_X86_64: true
   BUILD_WEB: false
 
@@ -449,7 +450,7 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-ios-ytrace-release" >> "$GITHUB_OUTPUT"
 
     - name: Install macOS dependencies
-      run: brew install automake autoconf libtool ninja brotli
+      run: brew install automake autoconf libtool ninja nasm brotli meson
 
     - name: Configure CMake for iOS
       run: >
@@ -478,7 +479,7 @@ jobs:
   build-ios-x86_64:
     needs: read-flags
     if: needs.read-flags.outputs.ios_x86_64 == 'true'
-    runs-on: macos-latest
+    runs-on: macos-15-intel
 
     steps:
     - uses: actions/checkout@v4
@@ -490,7 +491,7 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build-ios_x86_64-ytrace-release" >> "$GITHUB_OUTPUT"
 
     - name: Install macOS dependencies
-      run: brew install automake autoconf libtool ninja brotli
+      run: brew install automake autoconf libtool ninja nasm brotli meson
 
     - name: Configure CMake for iOS Simulator
       run: >

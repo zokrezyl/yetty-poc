@@ -106,8 +106,8 @@ add_subdirectory(ypaint)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)
 add_subdirectory(ythorvg)
-# yvideo requires dav1d/openh264 not available on iOS/WebAssembly
-if(NOT EMSCRIPTEN AND NOT YETTY_IOS)
+# yvideo requires dav1d/openh264 not available on WebAssembly
+if(NOT EMSCRIPTEN)
     add_subdirectory(yvideo)
 endif()
 add_subdirectory(cards)

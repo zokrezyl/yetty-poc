@@ -54,6 +54,17 @@ if(EXISTS "${_LIBJPEG_SRC_DIR}/src/turbojpeg.h")
             -DWITH_SIMD=OFF
             -DREQUIRE_SIMD=OFF
         )
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # For iOS: pass cross-compilation settings, disable SIMD to avoid CMake bugs
+        list(APPEND _LIBJPEG_CMAKE_ARGS
+            -DCMAKE_SYSTEM_NAME=iOS
+            -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}
+            -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}
+            -DCMAKE_SYSTEM_PROCESSOR=${CMAKE_OSX_ARCHITECTURES}
+            -DWITH_SIMD=OFF
+            -DREQUIRE_SIMD=OFF
+        )
     elseif(ANDROID)
         # For Android: pass cross-compilation settings
         if(CMAKE_TOOLCHAIN_FILE)
