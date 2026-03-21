@@ -19,10 +19,12 @@ target_link_libraries(yetty_vnc PUBLIC
     yetty_base
 )
 
+# YETTY_HAS_YVIDEO must be PUBLIC and always defined - consumers need correct sizeof(VncServer)
+target_compile_definitions(yetty_vnc PUBLIC YETTY_HAS_YVIDEO=1)
+
 # yvideo provides H.264/AV1 codec support (not available on EMSCRIPTEN)
 if(NOT EMSCRIPTEN)
     target_link_libraries(yetty_vnc PUBLIC yetty_yvideo)
-    target_compile_definitions(yetty_vnc PRIVATE YETTY_HAS_YVIDEO=1)
 endif()
 
 if(WIN32)

@@ -33,6 +33,29 @@ if(thorvg_ADDED)
 ")
     file(WRITE "${thorvg_SOURCE_DIR}/src/common/config.h" "${THORVG_CONFIG_H_CONTENT}")
 
+    # Patch tvgInitializer.cpp to fix global allocator overrides.
+    #
+    # WHY: thorvg overrides global operator new/delete to use malloc/free.
+    # But it's incomplete:
+    #   1. Missing C++14 sized delete: operator delete(void*, size_t)
+    #   2. Missing nothrow new: operator new(size_t, nothrow_t)
+    #
+    # This causes alloc-dealloc mismatches:
+    #   - litehtml uses sized delete → standard delete (not thorvg's)
+    #   - SPIRV-Tools uses nothrow new → standard new, but thorvg's delete
+    #
+    # Fix: Add ALL missing operator overrides for consistency.
+    set(TVG_INIT_FILE "${thorvg_SOURCE_DIR}/src/renderer/tvgInitializer.cpp")
+    file(READ "${TVG_INIT_FILE}" TVG_INIT_CONTENT)
+    if(NOT TVG_INIT_CONTENT MATCHES "operator delete.*size_t")
+        string(REPLACE
+            "void operator delete(void* ptr) noexcept {\n    tvg::free(ptr);\n}"
+            "void operator delete(void* ptr) noexcept {\n    tvg::free(ptr);\n}\n\nvoid operator delete(void* ptr, std::size_t) noexcept {\n    tvg::free(ptr);\n}\n\nvoid* operator new(std::size_t size, const std::nothrow_t&) noexcept {\n    return tvg::malloc(size);\n}\n\nvoid operator delete(void* ptr, const std::nothrow_t&) noexcept {\n    tvg::free(ptr);\n}"
+            TVG_INIT_CONTENT "${TVG_INIT_CONTENT}")
+        file(WRITE "${TVG_INIT_FILE}" "${TVG_INIT_CONTENT}")
+        message(STATUS "ThorVG: Patched tvgInitializer.cpp to add sized delete and nothrow operators")
+    endif()
+
     # Collect ThorVG source files
     file(GLOB THORVG_COMMON_SOURCES
         ${thorvg_SOURCE_DIR}/src/common/*.cpp

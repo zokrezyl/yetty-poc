@@ -82,7 +82,7 @@ static void yamlToConfigNode(const YAML::Node& yaml, ConfigNode& node) {
 
     for (auto it = yaml.begin(); it != yaml.end(); ++it) {
         std::string key = it->first.as<std::string>();
-        const YAML::Node& val = it->second;
+        YAML::Node val = it->second;  // Copy - yaml-cpp iterator returns temporary
 
         if (val.IsMap()) {
             // Recurse into child
