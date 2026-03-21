@@ -478,7 +478,7 @@ jobs:
   build-ios-x86_64:
     needs: read-flags
     if: needs.read-flags.outputs.ios_x86_64 == 'true'
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
     - uses: actions/checkout@v4
