@@ -3,6 +3,7 @@
 #if YETTY_IOS
 
 #include "../../telnet/telnet-pty-reader.h"
+#include "../../ssh/ssh-pty-reader.h"
 #include <ytrace/ytrace.hpp>
 #include <cstdlib>
 #include <ctime>
@@ -207,24 +208,31 @@ public:
 
         // Try SSH from environment
         if (sshHost && sshHost[0] != '\0') {
-            std::string addr = std::string(sshHost);
-            if (sshPort && sshPort[0] != '\0') {
-                addr += ":" + std::string(sshPort);
-            } else {
-                addr += ":22";
+            const char* sshUser = std::getenv("YETTY_SSH_USER");
+            const char* sshPass = std::getenv("YETTY_SSH_PASSWORD");
+            const char* sshKey = std::getenv("YETTY_SSH_KEY");
+
+            ssh::SshConfig sshCfg;
+            sshCfg.host = sshHost;
+            sshCfg.port = (sshPort && sshPort[0] != '\0') ? static_cast<uint16_t>(std::atoi(sshPort)) : 22;
+            sshCfg.username = (sshUser && sshUser[0] != '\0') ? sshUser : "root";
+            if (sshPass && sshPass[0] != '\0') {
+                sshCfg.password = sshPass;
             }
+            if (sshKey && sshKey[0] != '\0') {
+                sshCfg.privateKeyPath = sshKey;
+            }
+            sshCfg.cols = config.cols;
+            sshCfg.rows = config.rows;
 
-            yinfo("iOS: Attempting SSH connection to {}", addr);
+            yinfo("iOS: Attempting SSH connection to {}@{}:{}", sshCfg.username, sshCfg.host, sshCfg.port);
 
-            PtyConfig sshConfig = config;
-            sshConfig.shell = addr;
-
-            auto reader = std::make_shared<telnet::TelnetPtyReader>();
-            if (auto res = reader->init(sshConfig); res) {
+            auto result = ssh::createSshPtyReader(config, sshCfg);
+            if (result) {
                 yinfo("iOS: SSH connection successful!");
-                return Ok<PtyReader::Ptr>(reader);
+                return result;
             } else {
-                ywarn("iOS: SSH connection failed: {}", res.error().message());
+                ywarn("iOS: SSH connection failed: {}", result.error().message());
             }
         }
 

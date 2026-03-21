@@ -11,6 +11,7 @@
 #include <uv.h>
 #include <thread>
 #include <atomic>
+#include <cstdlib>
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -117,13 +118,13 @@ static yetty::Yetty::Ptr g_yetty = nullptr;
 }
 
 - (void)renderFrame {
-    // Process libuv events for async I/O (telnet, etc.)
-    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-
-    // Dispatch frame event to trigger rendering
-    if (auto loopResult = yetty::base::EventLoop::instance(); loopResult) {
-        (*loopResult)->dispatch(yetty::base::Event::screenUpdateEvent());
+    // Render frame
+    if (g_yetty) {
+        (void)g_yetty->iterate();
     }
+
+    // Process libuv events for async I/O (SSH, VNC, etc.)
+    uv_run(uv_default_loop(), UV_RUN_NOWAIT);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -185,7 +186,44 @@ static yetty::Yetty::Ptr g_yetty = nullptr;
 }
 
 - (void)initializeYetty {
-    yinfo("iOS: Initializing Yetty...");
+    // Hardcoded SSH for testing - skip dialog
+    yinfo("iOS: Connecting to hardcoded SSH misi@192.168.1.40...");
+
+    // Enable VNC server for remote access (server mode = local + VNC)
+    setenv("YETTY_VNC_SERVER", "1", 1);
+    setenv("YETTY_VNC_PORT", "5900", 1);
+
+    [self initializeYettyWithSshHost:@"192.168.1.40"
+                                port:@"22"
+                                user:@"misi"
+                            password:@"randompass123"
+                             keyPath:@""];
+}
+
+- (void)initializeYettyWithSshHost:(NSString*)host
+                              port:(NSString*)port
+                              user:(NSString*)user
+                          password:(NSString*)password
+                           keyPath:(NSString*)keyPath {
+    yinfo("iOS: Initializing with SSH {}@{}:{}",
+          [user UTF8String], [host UTF8String], [port UTF8String]);
+
+    // Store SSH config in environment variables (PtyManager reads them)
+    if (host.length > 0) {
+        setenv("YETTY_SSH_HOST", [host UTF8String], 1);
+    }
+    if (port.length > 0) {
+        setenv("YETTY_SSH_PORT", [port UTF8String], 1);
+    }
+    if (user.length > 0) {
+        setenv("YETTY_SSH_USER", [user UTF8String], 1);
+    }
+    if (password.length > 0) {
+        setenv("YETTY_SSH_PASSWORD", [password UTF8String], 1);
+    }
+    if (keyPath.length > 0) {
+        setenv("YETTY_SSH_KEY", [keyPath UTF8String], 1);
+    }
 
     int fakeArgc = 1;
     const char* fakeArgv[] = {"yetty", nullptr};
@@ -195,12 +233,16 @@ static yetty::Yetty::Ptr g_yetty = nullptr;
         yerror("iOS: Failed to initialize Yetty: {}", result.error().message());
 
         UIAlertController* alert = [UIAlertController
-            alertControllerWithTitle:@"Initialization Failed"
+            alertControllerWithTitle:@"Connection Failed"
             message:[NSString stringWithFormat:@"%s", result.error().message().c_str()]
             preferredStyle:UIAlertControllerStyleAlert];
 
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-            style:UIAlertActionStyleDefault handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Retry"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction* action) {
+                // TODO: Show SSH connection dialog for retry
+                [self initializeYetty];
+            }]];
 
         [self.viewController presentViewController:alert animated:YES completion:nil];
         return;
