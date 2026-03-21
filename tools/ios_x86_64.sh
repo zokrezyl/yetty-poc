@@ -4,7 +4,7 @@
 # Supports: macOS only
 #
 # Usage:
-#   First build: make build-ios_x86_64-ytrace-debug (or -release)
+#   First build: make build-ios_x86_64-ytrace-release (or -debug)
 #   Then run:
 #     ./tools/ios_x86_64.sh              # Start simulator with yetty
 #     ./tools/ios_x86_64.sh --kill       # Kill running simulator
@@ -24,11 +24,11 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 SIMULATOR_NAME="yetty-simulator"
 DEVICE_TYPE="iPhone 15 Pro"
 RUNTIME="iOS-17-2"
-# Try debug build first, then release
-if [ -d "$PROJECT_ROOT/build-ios_x86_64-ytrace-debug/yetty.app" ]; then
-    APP_BUNDLE="${APP_BUNDLE:-$PROJECT_ROOT/build-ios_x86_64-ytrace-debug/yetty.app}"
-else
+# Try release build first, then debug
+if [ -d "$PROJECT_ROOT/build-ios_x86_64-ytrace-release/yetty.app" ]; then
     APP_BUNDLE="${APP_BUNDLE:-$PROJECT_ROOT/build-ios_x86_64-ytrace-release/yetty.app}"
+else
+    APP_BUNDLE="${APP_BUNDLE:-$PROJECT_ROOT/build-ios_x86_64-ytrace-debug/yetty.app}"
 fi
 BUNDLE_ID="com.yetty.terminal"
 
@@ -164,16 +164,9 @@ install_and_run() {
         error "App bundle not found: $APP_BUNDLE"
         echo ""
         echo "Build first with:"
-        echo "  make build-ios_x86_64-ytrace-debug"
+        echo "  make build-ios_x86_64-ytrace-release"
         echo ""
         exit 1
-    fi
-
-    # Ensure Info.plist has correct executable name (CMake doesn't substitute Xcode variables)
-    local plist_src="$PROJECT_ROOT/build-tools/ios/Info.plist"
-    local plist_dst="$APP_BUNDLE/Info.plist"
-    if [ -f "$plist_src" ]; then
-        cp "$plist_src" "$plist_dst"
     fi
 
     info "Installing app: $APP_BUNDLE"
@@ -208,9 +201,18 @@ list_simulators() {
 # Show library info
 #-----------------------------------------------------------------------------
 show_library_info() {
-    local lib_path="$PROJECT_ROOT/build-ios_x86_64-ytrace-debug/libyetty.a"
+    local lib_path=""
+    local build_dir=""
 
-    if [ -f "$lib_path" ]; then
+    if [ -f "$PROJECT_ROOT/build-ios_x86_64-ytrace-release/libyetty.a" ]; then
+        build_dir="$PROJECT_ROOT/build-ios_x86_64-ytrace-release"
+        lib_path="$build_dir/libyetty.a"
+    elif [ -f "$PROJECT_ROOT/build-ios_x86_64-ytrace-debug/libyetty.a" ]; then
+        build_dir="$PROJECT_ROOT/build-ios_x86_64-ytrace-debug"
+        lib_path="$build_dir/libyetty.a"
+    fi
+
+    if [ -n "$lib_path" ]; then
         echo ""
         echo "Built library:"
         echo "  Path: $lib_path"
@@ -218,11 +220,11 @@ show_library_info() {
         echo "  Arch: $(lipo -info "$lib_path" 2>/dev/null | sed 's/.*: //')"
         echo ""
         echo "Assets directory:"
-        echo "  $PROJECT_ROOT/build-ios_x86_64-ytrace-debug/ios-assets/"
+        echo "  $build_dir/ios-assets/"
         echo ""
     else
         warn "Library not built yet"
-        echo "Run: make build-ios_x86_64-ytrace-debug"
+        echo "Run: make build-ios_x86_64-ytrace-release"
     fi
 }
 
@@ -252,8 +254,8 @@ main() {
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "PREREQUISITE: Build the library first!"
-            echo "  make build-ios_x86_64-ytrace-debug"
             echo "  make build-ios_x86_64-ytrace-release"
+            echo "  make build-ios_x86_64-ytrace-debug"
             echo ""
             echo "OPTIONS:"
             echo "  (no options)    Start simulator (and install app if available)"
@@ -269,7 +271,7 @@ main() {
             echo ""
             echo "EXAMPLES:"
             echo "  # Build the library:"
-            echo "  make build-ios_x86_64-ytrace-debug"
+            echo "  make build-ios_x86_64-ytrace-release"
             echo ""
             echo "  # Start simulator:"
             echo "  $0"
