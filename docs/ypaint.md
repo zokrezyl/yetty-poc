@@ -742,3 +742,66 @@ Meanwhile, `gen-ydraw-types.py` generates `evalSDF()` (different function!) with
 | Segment   | 2        | 5         |
 
 Two incompatible ID schemes cause confusion.
+
+## Discovered Problems
+
+### Painter Buffer Issues
+
+#### 1. Arbitrary Cell Size Auto-Computation
+
+In `painter-buffer.inc` lines 103-106, the cell size is auto-computed with a **hardcoded magic number**:
+
+```cpp
+// Default to ~10x10 grid cells
+_cellSizeX = std::max(1.0f, sceneW / 10.0f);
+_cellSizeY = std::max(1.0f, sceneH / 10.0f);
+```
+
+This divides the scene by 10 to create "about 10 grid cells". This is completely arbitrary and
+**has nothing to do with terminal cell size**. In scrolling mode, this creates a fundamental
+coordinate system mismatch.
+
+#### 2. Coordinate System Mismatch in Scrolling Mode
+
+In `canvas.cpp` `addPrimitive()`, two incompatible coordinate systems are mixed:
+
+```cpp
+uint16_t localMinRow = static_cast<uint16_t>(
+    std::max(0, static_cast<int32_t>(std::floor((aabbMinY - baseY) / _cellSizeY))));
+uint16_t localMaxRow = ...;
+
+// In scrolling mode, grid rows are offset by cursor position
+uint16_t primMinRow = _scrollingMode ? (_cursorRow + localMinRow) : localMinRow;
+uint16_t primMaxRow = _scrollingMode ? (_cursorRow + localMaxRow) : localMaxRow;
+```
+
+**Problem:** `_cursorRow` is in **terminal cell units** (e.g., row 3 = terminal line 3), while
+`localMinRow/MaxRow` are computed using **ypaint cell size** (e.g., sceneHeight/10). These are
+completely different coordinate systems being added together.
+
+**Example with shapes.sh:**
+- Scene bounds: `[0,0]-[1600,807]`
+- YPaint cell size: 807/10 = ~80px (arbitrary!)
+- Terminal cursor at row 3
+- Circle at Y=90 with radius 40: AABB Y = 50-130
+
+**Canvas stores** the circle at:
+- localMinRow = floor((50-0)/80) = 0
+- localMaxRow = floor((130-0)/80) = 1
+- primMinRow = 3 + 0 = **3**
+- primMaxRow = 3 + 1 = **4**
+
+**Shader queries** at scene Y=90:
+- cellY = floor((90-0)/80) = **1**
+
+The shader looks up grid cell at row **1**, but the primitive is stored at rows **3-4**.
+**They never find each other.** This is why only one shape (or none) displays.
+
+#### 3. Required Fix
+
+In scrolling mode, the ypaint cell size MUST equal the terminal cell size so that:
+- `_cursorRow` (terminal rows) and `localMinRow` (ypaint grid rows) are in the same units
+- Grid lookup in shader matches where primitives are stored in canvas
+
+Alternatively, don't add `_cursorRow` to grid indices at all - let the gridOffset in the
+primitive handle the terminal position translation in the shader.
