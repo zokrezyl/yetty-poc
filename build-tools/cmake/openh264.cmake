@@ -113,7 +113,7 @@ if(openh264_ADDED)
         endif()
 
         # Determine if simulator or device
-        if(CMAKE_OSX_SYSROOT MATCHES "Simulator")
+        if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator" OR CMAKE_OSX_SYSROOT MATCHES "Simulator")
             set(IOS_SDK_TYPE "iphonesimulator")
         else()
             set(IOS_SDK_TYPE "iphoneos")

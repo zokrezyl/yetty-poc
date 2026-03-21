@@ -106,7 +106,7 @@ endian = 'little'
         endif()
 
         # Determine iOS platform type for -m flag
-        if(CMAKE_OSX_SYSROOT MATCHES "Simulator")
+        if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator" OR CMAKE_OSX_SYSROOT MATCHES "Simulator")
             set(DAV1D_IOS_VERSION_FLAG "-mios-simulator-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
         else()
             set(DAV1D_IOS_VERSION_FLAG "-miphoneos-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
