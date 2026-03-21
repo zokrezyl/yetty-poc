@@ -300,6 +300,16 @@ Result<void> VncClient::connect(const std::string& host, uint16_t port) {
 
     ydebug("VNC client: registered poll id={} for socket={} events={}", _pollId, _socket, pollEvents);
 
+    // Register for input events to forward to server
+    loop->registerListener(base::Event::Type::KeyDown, listener);
+    loop->registerListener(base::Event::Type::KeyUp, listener);
+    loop->registerListener(base::Event::Type::Char, listener);
+    loop->registerListener(base::Event::Type::MouseMove, listener);
+    loop->registerListener(base::Event::Type::MouseDown, listener);
+    loop->registerListener(base::Event::Type::MouseUp, listener);
+    loop->registerListener(base::Event::Type::Scroll, listener);
+    ydebug("VNC client: registered for input events");
+
     // If connect succeeded immediately, call onConnected callback now
     if (immediateConnect && onConnected) {
         ydebug("VNC client: calling onConnected (immediate connect)");
@@ -323,14 +333,27 @@ void VncClient::disconnect() {
     }
 #else
     // Deregister from event loop
-    if (_pollId >= 0) {
-        auto loopResult = base::EventLoop::instance();
-        if (loopResult) {
-            auto loop = *loopResult;
+    auto loopResult = base::EventLoop::instance();
+    if (loopResult) {
+        auto loop = *loopResult;
+
+        // Deregister from input events - use deregisterListener(listener) to remove from all types
+        // Note: sharedAs() may fail during destruction, so we try-catch
+        try {
+            auto listener = sharedAs<base::EventListener>();
+            if (listener) {
+                loop->deregisterListener(listener);  // Removes from all event types
+            }
+        } catch (const std::bad_weak_ptr&) {
+            // Object is being destroyed, listeners will be cleaned up automatically
+        }
+
+        // Deregister poll
+        if (_pollId >= 0) {
             loop->stopPoll(_pollId);
             loop->destroyPoll(_pollId);
+            _pollId = -1;
         }
-        _pollId = -1;
     }
 
     if (_socket >= 0) {
@@ -368,6 +391,65 @@ Result<void> VncClient::reconnect() {
 
 #ifndef __EMSCRIPTEN__
 Result<bool> VncClient::onEvent(const base::Event& event) {
+    // Handle input events - forward to server
+    if (_connected) {
+        switch (event.type) {
+            case base::Event::Type::KeyDown:
+                sendKeyDown(
+                    static_cast<uint32_t>(event.key.key),
+                    static_cast<uint32_t>(event.key.scancode),
+                    static_cast<uint8_t>(event.key.mods));
+                return Ok(true);
+            case base::Event::Type::KeyUp:
+                sendKeyUp(
+                    static_cast<uint32_t>(event.key.key),
+                    static_cast<uint32_t>(event.key.scancode),
+                    static_cast<uint8_t>(event.key.mods));
+                return Ok(true);
+            case base::Event::Type::Char:
+                sendCharWithMods(event.chr.codepoint, static_cast<uint8_t>(event.chr.mods));
+                return Ok(true);
+            case base::Event::Type::MouseMove:
+                sendMouseMove(
+                    static_cast<int16_t>(event.mouse.x),
+                    static_cast<int16_t>(event.mouse.y),
+                    0);
+                return Ok(true);
+            case base::Event::Type::MouseDown:
+                sendMouseButton(
+                    static_cast<int16_t>(event.mouse.x),
+                    static_cast<int16_t>(event.mouse.y),
+                    static_cast<MouseButton>(event.mouse.button),
+                    true,
+                    static_cast<uint8_t>(event.mouse.mods));
+                return Ok(true);
+            case base::Event::Type::MouseUp:
+                sendMouseButton(
+                    static_cast<int16_t>(event.mouse.x),
+                    static_cast<int16_t>(event.mouse.y),
+                    static_cast<MouseButton>(event.mouse.button),
+                    false,
+                    static_cast<uint8_t>(event.mouse.mods));
+                return Ok(true);
+            case base::Event::Type::Scroll:
+                sendMouseScroll(
+                    static_cast<int16_t>(event.scroll.x),
+                    static_cast<int16_t>(event.scroll.y),
+                    static_cast<int16_t>(event.scroll.dx * 120),  // VNC uses 120 units per notch
+                    static_cast<int16_t>(event.scroll.dy * 120),
+                    static_cast<uint8_t>(event.scroll.mods));
+                return Ok(true);
+            default:
+                break;
+        }
+    }
+
+    // Handle poll events for socket I/O
+    if (event.type != base::Event::Type::PollReadable &&
+        event.type != base::Event::Type::PollWritable) {
+        return Ok(false);
+    }
+
     if (event.poll.fd != _socket) {
         return Ok(false);
     }
