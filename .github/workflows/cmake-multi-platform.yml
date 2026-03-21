@@ -9,6 +9,7 @@ on:
     branches:
       - '**'
 
+
 # =============================================================================
 # BUILD FLAGS - Set to true to enable specific builds (tags always build all)
 # =============================================================================
@@ -478,7 +479,7 @@ jobs:
   build-ios-x86_64:
     needs: read-flags
     if: needs.read-flags.outputs.ios_x86_64 == 'true'
-    runs-on: macos-13
+    runs-on: macos-15-intel
 
     steps:
     - uses: actions/checkout@v4
