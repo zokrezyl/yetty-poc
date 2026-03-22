@@ -116,20 +116,19 @@ public:
                     float aabbMaxX, float aabbMaxY) override {
     float baseY = (_sceneMinY > 1e9f) ? 0.0f : _sceneMinY;
 
-    // Compute row range from primitive's AABB in scene coordinates.
-    // In scrolling mode, we store at SCENE-RELATIVE rows (not cursor-offset).
-    // The gridOffset in each primitive handles visual translation to cursor position.
-    // This allows multiple primitives drawn at different cursor positions to coexist.
+    // Local row range within primitive's AABB (not offset by cursor)
     uint16_t localMinRow = static_cast<uint16_t>(
         std::max(0, static_cast<int32_t>(std::floor((aabbMinY - baseY) / _cellSizeY))));
     uint16_t localMaxRow = static_cast<uint16_t>(
         std::max(0, static_cast<int32_t>(std::floor((aabbMaxY - baseY) / _cellSizeY))));
 
-    // Store at scene-relative rows (gridOffset handles cursor translation in shader)
-    uint16_t primMinRow = localMinRow;
-    uint16_t primMaxRow = localMaxRow;
+    // In scrolling mode, grid rows are offset by cursor position
+    uint16_t primMinRow = _scrollingMode ? (_cursorRow + localMinRow) : localMinRow;
+    uint16_t primMaxRow = _scrollingMode ? (_cursorRow + localMaxRow) : localMaxRow;
 
     ensureLines(primMaxRow + 1);
+    ydebug("addPrimitive: cursor=({},{}) localRows=[{},{}] primRows=[{},{}] _lines.size={}",
+           _cursorCol, _cursorRow, localMinRow, localMaxRow, primMinRow, primMaxRow, _lines.size());
 
     // Pack gridOffset: (cursorCol, cursorRow) - shader coordinate offset
     // This is where drawing STARTS, not where primitive is STORED
@@ -236,7 +235,10 @@ public:
           std::ceil((_sceneMaxX - _sceneMinX) / _cellSizeX));
     }
     // Extend for actual lines if they go beyond scene bounds
-    gridH = std::max(gridH, static_cast<uint32_t>(_lines.size()));
+    uint32_t linesCount = static_cast<uint32_t>(_lines.size());
+    ydebug("rebuildPackedGrid: heightInLines={} _lines.size={} scene=[{},{}]-[{},{}] cellSizeY={}",
+           gridH, linesCount, _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY, _cellSizeY);
+    gridH = std::max(gridH, linesCount);
     for (const auto &line : _lines) {
       gridW = std::max(gridW, static_cast<uint32_t>(line.cells.size()));
     }

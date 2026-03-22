@@ -54,9 +54,9 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
         contentMinY + (pixelPos.y / gridPixelH) * contentH
     );
 
-    // Grid lookup - compute scene-relative cell
-    // Canvas stores primitives at scene-relative rows. The gridOffset in each
-    // primitive handles visual translation to cursor position during SDF eval.
+    // Grid lookup - compute cell from scene position
+    // Canvas stores primitives at cursorRow + localRow. Query position maps
+    // directly to storage row since scenePos = visualPixelPos when bounds match.
     let invCellSizeX = 1.0 / cellSizeX;
     let invCellSizeY = 1.0 / cellSizeY;
     let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(gridWidth - 1u)));

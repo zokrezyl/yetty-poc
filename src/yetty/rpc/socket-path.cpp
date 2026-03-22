@@ -24,10 +24,26 @@ Result<std::string> createSocketPath(const std::string& runtimeDir) {
     std::string path = "\\\\.\\pipe\\yetty-" + std::to_string(_getpid());
     return Ok(path);
 #else
-    // Use the runtime directory provided by Platform
-    // Create yetty subdirectory: <runtimeDir>/yetty/
-    std::string dir = runtimeDir + "/yetty";
-    mkdir(dir.c_str(), 0700); // ok if already exists
+    // Use cache directory for sockets (more reliable than XDG_RUNTIME_DIR)
+    // The runtimeDir parameter points to cache/yetty or similar
+    (void)runtimeDir;
+
+    // Build path: $HOME/.cache/yetty/rpc-socket/
+    const char* xdgCache = std::getenv("XDG_CACHE_HOME");
+    const char* home = std::getenv("HOME");
+    std::string cacheBase;
+    if (xdgCache) {
+        cacheBase = std::string(xdgCache) + "/yetty";
+    } else if (home) {
+        cacheBase = std::string(home) + "/.cache/yetty";
+    } else {
+        cacheBase = "/tmp/yetty-" + std::to_string(getuid());
+    }
+
+    // Create directories
+    mkdir(cacheBase.c_str(), 0700);
+    std::string dir = cacheBase + "/rpc-socket";
+    mkdir(dir.c_str(), 0700);
 
     // Socket file: yetty-<pid>.sock
     std::string path = dir + "/yetty-" + std::to_string(getpid()) + ".sock";

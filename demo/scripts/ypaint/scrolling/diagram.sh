@@ -99,6 +99,9 @@ body:
 EOF
 )
 
+echo "Process diagram demo"
+echo ""
+
 PAYLOAD=$(echo "$YAML_PAYLOAD" | base64 -w0)
 printf '\033]666674;--yaml;%s\033\\' "$PAYLOAD"
 echo "YPaint scrolling layer: diagram demo"
