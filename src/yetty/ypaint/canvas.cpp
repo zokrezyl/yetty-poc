@@ -199,6 +199,8 @@ public:
     }
 
     _dirty = true;
+    ydebug("scrollLines: popped {} lines, _lines.size={} cursorRow={}",
+           numLines, _lines.size(), _cursorRow);
   }
 
   //===========================================================================
