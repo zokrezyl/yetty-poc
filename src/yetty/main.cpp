@@ -20,9 +20,6 @@
 #endif
 
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
-static void sigint_handler(int sig) {
-    ydebug("SIGINT received! (signal {})", sig);
-}
 
 static void setup_logging(int argc, char* argv[]) {
     // Pre-parse --ytrace-default-on (must be set before any ytrace usage)
@@ -85,7 +82,10 @@ void android_main(android_app* app) {
     }
     auto initManager = *initResult;
 
-    initManager->run();
+    auto runResult = initManager->run();
+    if (!runResult) {
+        yerror("Run failed: {}", yetty::error_msg(runResult));
+    }
 
     ydebug("android_main exiting");
 }
@@ -106,20 +106,24 @@ int main(int argc, char* argv[]) {
     }
     auto initManager = *initResult;
 
-    initManager->run(argc, argv);
+    auto runResult = initManager->run(argc, argv);
+    if (!runResult) {
+        yerror("Run failed: {}", yetty::error_msg(runResult));
+        return 1;
+    }
 
     return 0;
 }
 
 #else
 //-----------------------------------------------------------------------------
-// Desktop Entry Point (Linux/macOS/Windows)
+// Desktop/iOS Entry Point (Linux/macOS/Windows/iOS)
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
     setup_logging(argc, argv);
 
     ydebug("=== YETTY BUILD ===");
-    signal(SIGINT, sigint_handler);
+    // Signal handling (SIGINT/SIGTERM) is done in EventLoop via libuv
 
     auto initResult = yetty::InitManager::create();
     if (!initResult) {
@@ -129,7 +133,12 @@ int main(int argc, char* argv[]) {
     }
     auto initManager = *initResult;
 
-    initManager->run(argc, argv);
+    auto runResult = initManager->run(argc, argv);
+    if (!runResult) {
+        yerror("Run failed: {}", yetty::error_msg(runResult));
+        std::cerr << "ERROR: " << yetty::error_msg(runResult) << std::endl;
+        return 1;
+    }
 
     ydebug("Main thread: InitManager::run() returned");
     return 0;

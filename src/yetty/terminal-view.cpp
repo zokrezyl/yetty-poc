@@ -25,6 +25,13 @@ public:
         return Ok();
     }
 
+    Result<void> run() override {
+        if (terminal_) {
+            return terminal_->run();
+        }
+        return Ok();
+    }
+
     Result<void> render(WGPURenderPassEncoder pass) override {
         if (!terminal_) {
             return Ok();

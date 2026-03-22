@@ -74,12 +74,12 @@ public:
 
         int r = uv_pipe_bind(&_serverPipe, _socketPath.c_str());
         if (r != 0) {
-            return Err<void>("RpcServer: bind failed: " + std::string(uv_strerror(r)));
+            return Err<void>("RpcServer: bind '" + _socketPath + "' failed: " + std::string(uv_strerror(r)));
         }
 
         r = uv_listen(reinterpret_cast<uv_stream_t*>(&_serverPipe), 8, onNewConnection);
         if (r != 0) {
-            return Err<void>("RpcServer: listen failed: " + std::string(uv_strerror(r)));
+            return Err<void>("RpcServer: listen '" + _socketPath + "' failed: " + std::string(uv_strerror(r)));
         }
 
         _running = true;

@@ -109,6 +109,21 @@ public:
 
     Result<void> init() { return Ok(); }
 
+    Result<void> run() override {
+        ydebug("Split::run() - propagating to children");
+        if (_first) {
+            if (auto r = _first->run(); !r) {
+                return Err<void>("Failed to run first tile", r);
+            }
+        }
+        if (_second) {
+            if (auto r = _second->run(); !r) {
+                return Err<void>("Failed to run second tile", r);
+            }
+        }
+        return Ok();
+    }
+
     Result<void> onShutdown() override {
         Result<void> result = Ok();
         if (_first) {
@@ -323,6 +338,16 @@ public:
 
     Result<void> init() {
         registerForEvents();
+        return Ok();
+    }
+
+    Result<void> run() override {
+        ydebug("Pane::run() - propagating to views");
+        for (auto& view : _views) {
+            if (auto r = view->run(); !r) {
+                return Err<void>("Failed to run view", r);
+            }
+        }
         return Ok();
     }
 

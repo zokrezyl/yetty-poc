@@ -12,7 +12,6 @@
 #include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
 #include <yetty/platform/surface-manager.h>
-#include <yetty/platform/fs-path-manager.h>
 #include <yetty/platform/clipboard-manager.h>
 #include <yetty/platform/pty-manager.h>
 #include <yetty/base/base.h>
@@ -34,7 +33,6 @@
 #include <csignal>
 #include <cstring>
 #include <ytrace/ytrace.hpp>
-#include <args.hxx>
 #include <turbojpeg.h>
 #include "vnc/vnc-client.h"
 #include "vnc/vnc-server.h"
@@ -52,12 +50,15 @@ extern "C" {
 
 namespace yetty {
 
+// Forward declaration for signal handler
+static void signalHandler(int sig);
+
 class YettyImpl : public Yetty, public base::EventListener {
 public:
     YettyImpl() = default;
     ~YettyImpl() override = default;
 
-    Result<void> init(int argc, char* argv[]) noexcept;
+    Result<void> init(Config::Ptr config) noexcept;
     Result<void> run() noexcept override;
     Result<void> iterate() noexcept override;
     Result<bool> onEvent(const base::Event& event) override;
@@ -66,7 +67,6 @@ protected:
     Result<void> onShutdown() override;
 
 private:
-    Result<void> parseArgs(int argc, char* argv[]) noexcept;
     Result<void> initEmbeddedAssets() noexcept;
     Result<void> initWindow() noexcept;
     Result<void> initWebGPU() noexcept;
@@ -87,10 +87,6 @@ private:
 
     Result<Workspace::Ptr> createWorkspace() noexcept;
 
-    // Platform managers
-    SurfaceManager::Ptr _surfaceManager;
-    FsPathManager::Ptr _fsPathManager;
-    ClipboardManager::Ptr _clipboardManager;
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
@@ -236,93 +232,53 @@ YettyImpl* YettyImpl::s_instance = nullptr;
 // Factory
 //=============================================================================
 
-Result<Yetty::Ptr> Yetty::createImpl(ContextType&, int argc, char* argv[]) noexcept {
+Result<Yetty::Ptr> Yetty::createImpl(ContextType&, Config::Ptr config) noexcept {
     auto impl = Ptr(new YettyImpl());
-    if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv); !res) {
+    if (auto res = static_cast<YettyImpl*>(impl.get())->init(config); !res) {
         yerror("Yetty creation failed: {}", error_msg(res));
         return Err<Ptr>("Failed to init Yetty", res);
     }
     ytest("yetty-created", "Yetty created successfully");
     return Ok(std::move(impl));
 }
-
-#if defined(__ANDROID__)
-Result<Yetty::Ptr> Yetty::createImpl(ContextType&, struct android_app* app) noexcept {
-    (void)app;
-    auto impl = Ptr(new YettyImpl());
-
-    // Check for VNC mode via environment variable
-    // Set YETTY_VNC_HEADLESS=1 and optionally YETTY_VNC_PORT=5900
-    const char* vncHeadless = getenv("YETTY_VNC_HEADLESS");
-    const char* vncPort = getenv("YETTY_VNC_PORT");
-
-    int argc = 1;
-    std::vector<const char*> argv_vec = {"yetty"};
-
-    if (vncHeadless && std::string(vncHeadless) == "1") {
-        argv_vec.push_back("--vnc-headless");
-        argc++;
-        if (vncPort) {
-            argv_vec.push_back("--vnc-port");
-            argv_vec.push_back(vncPort);
-            argc += 2;
-        }
-    }
-
-    std::vector<char*> argv_ptrs;
-    for (const char* arg : argv_vec) {
-        argv_ptrs.push_back(const_cast<char*>(arg));
-    }
-
-    if (auto res = static_cast<YettyImpl*>(impl.get())->init(argc, argv_ptrs.data()); !res) {
-        yerror("Yetty creation failed: {}", error_msg(res));
-        return Err<Ptr>("Failed to init Yetty", res);
-    }
-    ytest("yetty-created", "Yetty created successfully");
-    return Ok(std::move(impl));
-}
-#endif
 
 //=============================================================================
 // Initialization
 //=============================================================================
 
-Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
+Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     ydebug("Yetty starting...");
 
-    ydebug("init: parseArgs");
-    if (auto res = parseArgs(argc, argv); !res) return res;
+    // Store config
+    _yettyContext.config = config;
+
+    // Read settings from config
+    _vncClientMode = config->get<bool>("vnc/client-mode", false);
+    _vncServerMode = config->get<bool>("vnc/server-mode", false);
+    _vncHeadless = config->get<bool>("vnc/headless", false);
+    _vncHost = config->get<std::string>("vnc/host", "");
+    _vncPort = static_cast<uint16_t>(config->get<int>("vnc/port", 5900));
+    _vncServerPort = static_cast<uint16_t>(config->get<int>("vnc/server-port", 5900));
+    _vncMergeRects = config->get<bool>("vnc/merge-rects", false);
+    _vncForceRaw = config->get<bool>("vnc/force-raw", false);
+    _vncCompressionQuality = static_cast<uint8_t>(config->get<int>("vnc/compression-quality", 0));
+    _vncAlwaysFull = config->get<bool>("vnc/always-full", false);
+    _vncUseH264 = config->get<bool>("vnc/use-h264", false);
+    _vncTestMode = config->get<bool>("vnc/test-mode", false);
+    _vncTestPattern = config->get<std::string>("vnc/test-pattern", "text");
+    _captureBenchmark = config->get<bool>("debug/capture-benchmark", false);
+    _msdfProviderName = config->get<std::string>("rendering/msdf-provider", "gpu");
+    _executeCommand = config->get<std::string>("shell/command", "");
+    _telnetAddress = config->get<std::string>("shell/telnet", "");
+    _telnetClientMode = !_telnetAddress.empty();
 
     ydebug("init: initWindow");
     if (auto res = initWindow(); !res) { ydebug("init: initWindow FAILED"); return res; }
 
-    // Extract embedded assets if needed (first run or version upgrade)
-    // This MUST happen before Config::create so default config is available
+    // Extract embedded assets if needed
     ydebug("init: initEmbeddedAssets");
     if (auto res = initEmbeddedAssets(); !res) {
         ywarn("init: initEmbeddedAssets failed (continuing with fallback): {}", res.error().message());
-    }
-
-    // Create Config after embedded assets are extracted (default config available)
-    ydebug("init: Config::create");
-    auto configResult = Config::create();
-    if (!configResult) {
-        ydebug("init: Config::create FAILED");
-        return Err<void>("Failed to create Config", configResult);
-    }
-    _yettyContext.config = *configResult;
-    ydebug("init: Config created");
-
-    // Set shell/command from -c/-e flag if specified
-    if (!_executeCommand.empty()) {
-        _yettyContext.config->setString("shell/command", _executeCommand);
-        ydebug("Set shell/command in config: {}", _executeCommand);
-    }
-
-    // Set telnet address if specified
-    if (!_telnetAddress.empty()) {
-        _yettyContext.config->setString("shell/telnet", _telnetAddress);
-        ydebug("Set shell/telnet in config: {}", _telnetAddress);
     }
 
     // Get EventQueue for thread-safe GPU callback wakeups
@@ -337,9 +293,14 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     ydebug("init: initSharedResources");
     if (auto res = initSharedResources(); !res) { ydebug("init: initSharedResources FAILED"); return res; }
 
-    // Create ShaderManager with GPUContext, allocator, and shaders directory from Platform
+    // Get paths from config (paths are platform-specific defaults, can be overridden)
+    auto shadersDir = _yettyContext.config->get<std::string>("paths/shaders", "");
+    auto fontsDir = _yettyContext.config->get<std::string>("paths/fonts", "");
+    auto msdfFontsDir = _yettyContext.config->get<std::string>("paths/msdf-fonts", "");
+
+    // Create ShaderManager with GPUContext, allocator, and shaders directory from config
     ydebug("init: ShaderManager::create");
-    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, _fsPathManager->getShadersDir());
+    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, shadersDir);
     if (!shaderMgrResult) {
         ydebug("init: ShaderManager::create FAILED");
         return Err<void>("Failed to create ShaderManager", shaderMgrResult);
@@ -355,16 +316,13 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
         ydebug("init: Using CPU MSDF CDB provider");
     } else {
-        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, _fsPathManager->getShadersDir());
+        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, shadersDir);
         ydebug("init: Using GPU MSDF CDB provider");
     }
 #endif
 
-    // Create FontManager with GPUContext, ShaderManager, and directories from Platform
+    // Create FontManager with GPUContext, ShaderManager, and directories from config
     ydebug("init: FontManager::create");
-    auto msdfFontsDir = _fsPathManager->getMsdfFontsDir();
-    auto fontsDir = _fsPathManager->getFontsDir();
-    auto shadersDir = _fsPathManager->getShadersDir();
 
     // Extract shader preload lists from config
     std::vector<std::string> preloadCardShaders;
@@ -387,9 +345,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.gpuAllocator = _gpuAllocator;
-    _yettyContext.surfaceManager = _surfaceManager;
-    _yettyContext.fsPathManager = _fsPathManager;
-    // PtyManager will be obtained via ::instance() when needed
+    // SurfaceManager and ClipboardManager are singletons - access via ::instance() when needed
+    // Paths are in config under "paths/*" - can be overridden via config file or env vars
 #if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
 #endif
@@ -430,22 +387,15 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     initEventLoop();
 
 #if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
-    // Create RPC server and write socket path to config BEFORE workspace/terminal
-    // (Terminal reads shell/env from config when forking the shell)
-    if (_yettyContext.config->get<bool>("rpc/enabled", true)) {
-        auto socketResult = rpc::createSocketPath(_fsPathManager->getRuntimeDir());
-        if (!socketResult) {
-            return Err<void>("Failed to create RPC socket path", socketResult);
-        }
-        auto rpcResult = rpc::RpcServer::create(*socketResult);
+    // Create RPC server (config already has rpc/enabled and rpc/socket-path set)
+    if (_yettyContext.config->get<bool>("rpc/enabled", false)) {
+        auto socketPath = _yettyContext.config->get<std::string>("rpc/socket-path", "");
+        auto rpcResult = rpc::RpcServer::create(socketPath);
         if (!rpcResult) {
             return Err<void>("Failed to create RPC server", rpcResult);
         }
         _rpcServer = *rpcResult;
-
-        _yettyContext.config->setString("rpc/socket-path", _rpcServer->socketPath());
-        _yettyContext.config->setString("shell/env/YETTY_SOCKET", _rpcServer->socketPath());
-
+        _yettyContext.config->setString("shell/env/YETTY_SOCKET", socketPath);
         rpc::registerEventLoopHandlers(*_rpcServer);
     }
 #endif
@@ -479,7 +429,11 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
 #endif
 
     s_instance = this;
-    _lastFpsTime = _surfaceManager->getTime();
+    if (!_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            _lastFpsTime = (*surfaceResult)->getTime();
+        }
+    }
 
     // Initialize capture benchmark mode if enabled
     if (_captureBenchmark) {
@@ -493,8 +447,10 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     // Initialize VNC client mode if enabled
     if (_vncClientMode) {
         // Get initial VNC content area size (window minus our statusbar)
-        int windowW, windowH;
-        _surfaceManager->getWindowSize(windowW, windowH);
+        int windowW = 800, windowH = 600;
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->getWindowSize(windowW, windowH);
+        }
         float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
         int vncH = windowH - static_cast<int>(statusbarH);
         uint16_t vncWidth = static_cast<uint16_t>(windowW > 0 ? windowW : 800);
@@ -520,8 +476,8 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
         _vncClient->onFrameReceived = [this]() {
 #if YETTY_WEB
             // Web builds: request animation frame directly
-            if (_surfaceManager) {
-                _surfaceManager->requestRender();
+            if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+                (*surfaceResult)->requestRender();
             }
 #else
             auto t = std::chrono::high_resolution_clock::now();
@@ -701,9 +657,11 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
                            _vncRequestedWidth, _vncRequestedHeight);
                     return;
                 }
-                // Use current window dimensions
-                int w, h;
-                _surfaceManager->getFramebufferSize(w, h);
+                // Use current window dimensions (or defaults in headless mode)
+                int w = 800, h = 600;
+                if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+                    (*surfaceResult)->getFramebufferSize(w, h);
+                }
                 widthPx = static_cast<uint16_t>(w);
                 heightPx = static_cast<uint16_t>(h);
                 ydebug("VNC onResize: client requested current size -> {}x{}", widthPx, heightPx);
@@ -765,203 +723,6 @@ Result<void> YettyImpl::init(int argc, char* argv[]) noexcept {
     return Ok();
 }
 
-Result<void> YettyImpl::parseArgs(int argc, char* argv[]) noexcept {
-#if YETTY_WEB
-    // Web builds: read mode from environment variables set by JavaScript
-    // This MUST be done before the early return below!
-    // YETTY_MODE: jslinux, vnc, telnet
-    // YETTY_VNC_CLIENT: ws://host:port (WebSocket URL for VNC)
-    // YETTY_TELNET: ws://host:port (WebSocket URL for telnet)
-    const char* modeEnv = getenv("YETTY_MODE");
-    if (modeEnv) {
-        std::string mode(modeEnv);
-        ydebug("Web mode: {}", mode);
-
-        if (mode == "vnc") {
-            const char* vncClientEnv = getenv("YETTY_VNC_CLIENT");
-            if (vncClientEnv && vncClientEnv[0] != '\0') {
-                _vncClientMode = true;
-                // For WebSocket URLs, store the full URL as host (VncClient handles ws:// URLs)
-                _vncHost = vncClientEnv;
-                _vncPort = 0;  // Port embedded in URL
-                ydebug("VNC client mode (WebSocket): {}", _vncHost);
-            } else {
-                // Mode is VNC but no URL - still set the flag to prevent VM startup
-                _vncClientMode = true;
-                ydebug("VNC client mode enabled (no URL yet)");
-            }
-        } else if (mode == "telnet") {
-            const char* telnetEnv = getenv("YETTY_TELNET");
-            if (telnetEnv && telnetEnv[0] != '\0') {
-                _telnetClientMode = true;
-                _telnetAddress = telnetEnv;
-                ydebug("Telnet client mode (WebSocket): {}", _telnetAddress);
-            } else {
-                // Mode is telnet but no URL - still set the flag to prevent VM startup
-                _telnetClientMode = true;
-                ydebug("Telnet client mode enabled (no URL yet)");
-            }
-        }
-        // mode == "jslinux" is the default, no special handling needed
-    }
-#endif
-
-    // Skip argument parsing if no args (e.g., Android NativeActivity, Emscripten)
-    if (argc <= 0 || argv == nullptr) {
-        return Ok();
-    }
-
-    args::ArgumentParser parser("yetty", "Terminal emulator with GPU rendering");
-
-    args::HelpFlag help(parser, "help", "Show this help", {'h', "help"});
-    args::ValueFlag<std::string> executeFlag(parser, "COMMAND", "Execute command", {'e', 'c'});
-    args::ValueFlag<std::string> msdfProviderFlag(parser, "PROVIDER", "MSDF provider (cpu/gpu)", {"msdf-provider"});
-    args::ValueFlag<std::string> telnetFlag(parser, "HOST:PORT", "Connect via telnet (default: 127.0.0.1:8023)", {"telnet"});
-    args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Enable capture benchmark mode", {"capture-benchmark"});
-    args::ValueFlag<std::string> vncClientFlag(parser, "HOST:PORT", "Connect as VNC client", {"vnc-client"});
-    args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server (with local window)", {"vnc-server"});
-    args::ValueFlag<uint16_t> vncServerPortFlag(parser, "PORT", "VNC server port (default 5900)", {"vnc-port"}, 5900);
-    args::Flag vncHeadlessFlag(parser, "vnc-headless", "Start VNC server without window (headless)", {"vnc-headless"});
-    args::Flag vncMergeRectsFlag(parser, "vnc-merge-rects", "Merge dirty tiles into larger rectangles (better compression)", {"vnc-merge-rects"});
-    args::Flag vncRawFlag(parser, "vnc-raw", "Force raw encoding (no JPEG compression) - client-side", {"vnc-raw"});
-    args::ValueFlag<int> vncQualityFlag(parser, "QUALITY", "JPEG compression quality 1-100 (default 80); on server sets default, on client overrides server", {"vnc-compression-quality"}, 0);
-    args::Flag vncAlwaysFullFlag(parser, "vnc-always-full", "Always request full frame (no delta encoding) - client-side", {"vnc-always-full"});
-    args::Flag vncUseH264Flag(parser, "vnc-use-h264", "Use H.264 encoding instead of JPEG (implies --vnc-always-full) - client-side", {"vnc-use-h264"});
-    args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test mode: text, color, scroll, stress", {"vnc-test"});
-
-    // ytrace options
-    args::Flag ytraceDefaultOnFlag(parser, "ytrace-default-on", "Enable all ytrace points by default", {"ytrace-default-on"});
-    args::ValueFlag<std::string> ytraceOutFlag(parser, "FILE", "ytrace output file (- for stderr)", {"ytrace-out"});
-    args::ValueFlag<std::string> ytraceCtrlSocketFlag(parser, "PATH", "ytrace control socket path", {"ytrace-ctrl-socket"});
-
-    try {
-        parser.ParseCLI(argc, argv);
-    } catch (const args::Help&) {
-        std::cout << parser;
-        std::exit(0);
-    } catch (const args::Error& e) {
-        yerror("Argument error: {}", e.what());
-        std::cerr << parser;
-        return Err<void>(e.what());
-    }
-
-    if (executeFlag) {
-        _executeCommand = args::get(executeFlag);
-        ydebug("Execute command: {}", _executeCommand);
-    }
-
-    if (msdfProviderFlag) {
-        _msdfProviderName = args::get(msdfProviderFlag);
-        ydebug("MSDF provider: {}", _msdfProviderName);
-    }
-
-    if (captureBenchmarkFlag) {
-        _captureBenchmark = true;
-        ydebug("Capture benchmark mode enabled");
-    }
-
-    if (telnetFlag) {
-        _telnetAddress = args::get(telnetFlag);
-        if (_telnetAddress.empty()) {
-            _telnetAddress = "127.0.0.1:8023";  // Default for Termux telnetd
-        }
-        ydebug("Telnet mode: connecting to {}", _telnetAddress);
-    }
-
-    if (vncClientFlag) {
-        _vncClientMode = true;
-        std::string hostPort = args::get(vncClientFlag);
-        auto colonPos = hostPort.rfind(':');
-        if (colonPos != std::string::npos) {
-            _vncHost = hostPort.substr(0, colonPos);
-            _vncPort = static_cast<uint16_t>(std::stoi(hostPort.substr(colonPos + 1)));
-        } else {
-            _vncHost = hostPort;
-        }
-        ydebug("VNC client mode: connecting to {}:{}", _vncHost, _vncPort);
-    }
-
-    // --vnc-server and --vnc-headless are mutually exclusive
-    // --vnc-server: VNC server with local window
-    // --vnc-headless: VNC server without window (headless)
-    if (vncServerFlag && vncHeadlessFlag) {
-        return Err<void>("--vnc-server and --vnc-headless are mutually exclusive");
-    }
-
-    if (vncServerFlag) {
-        _vncServerMode = true;
-        _vncServerPort = args::get(vncServerPortFlag);
-        ydebug("VNC server mode: port {}", _vncServerPort);
-    }
-
-    if (vncHeadlessFlag) {
-        _vncServerMode = true;  // Headless implies server mode
-        _vncHeadless = true;
-        _vncServerPort = args::get(vncServerPortFlag);
-        ydebug("VNC headless server mode: port {} (no local window)", _vncServerPort);
-    }
-
-    if (vncMergeRectsFlag) {
-        _vncMergeRects = true;
-        ydebug("VNC rectangle merging enabled");
-    }
-
-    if (vncRawFlag) {
-        _vncForceRaw = true;
-        ydebug("VNC raw encoding enabled (no JPEG compression)");
-    }
-
-    if (vncQualityFlag && args::get(vncQualityFlag) > 0) {
-        int quality = args::get(vncQualityFlag);
-        _vncCompressionQuality = static_cast<uint8_t>(std::min(quality, 100));
-        ydebug("VNC compression quality set to {}", _vncCompressionQuality);
-    }
-
-    if (vncAlwaysFullFlag) {
-        _vncAlwaysFull = true;
-        ydebug("VNC always full frame mode enabled (no delta encoding)");
-    }
-
-    if (vncUseH264Flag) {
-        _vncUseH264 = true;
-        _vncAlwaysFull = true;  // H.264 requires full frame mode
-        yinfo("VNC H.264 encoding enabled (implies always-full)");
-    }
-
-    if (vncTestFlag) {
-        _vncTestMode = true;
-        _vncTestPattern = args::get(vncTestFlag);
-        _vncServerMode = true;  // Test mode implies server mode
-        ydebug("VNC test mode: pattern={}", _vncTestPattern);
-
-        // Set execute command for test patterns
-        if (_vncTestPattern == "text") {
-            // Scrolling text test - shows consistent readable content
-            _executeCommand = "bash -c 'frame=0; while true; do clear; echo \"=== VNC TEST: TEXT ===\"; echo \"Frame: $((++frame))\"; for i in $(seq 1 20); do echo \"Line $i: ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz\"; done; date; sleep 0.1; done'";
-        } else if (_vncTestPattern == "color") {
-            // Color test - shows ANSI colors
-            _executeCommand = "bash -c 'while true; do clear; echo \"=== VNC TEST: COLOR ===\"; for fg in 30 31 32 33 34 35 36 37; do for bg in 40 41 42 43 44 45 46 47; do printf \"\\033[%d;%dm X \\033[0m\" $fg $bg; done; echo; done; sleep 1; done'";
-        } else if (_vncTestPattern == "scroll") {
-            // Scroll test - continuous scrolling
-            _executeCommand = "bash -c 'i=0; while true; do echo \"Line $((++i)): $(date) - The quick brown fox jumps over the lazy dog\"; sleep 0.05; done'";
-        } else if (_vncTestPattern == "stress") {
-            // Stress test - maximum output
-            _executeCommand = "bash -c 'while true; do cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 1000; echo; done'";
-        }
-    }
-
-    // Handle ytrace control socket (not available on Emscripten)
-#ifndef YTRACE_NO_CONTROL_SOCKET
-    if (ytraceCtrlSocketFlag) {
-        std::string ctrlSocket = args::get(ytraceCtrlSocketFlag);
-        ytrace::TraceManager::instance().open_ctrl_socket(ctrlSocket.c_str());
-        ydebug("ytrace control socket: {}", ctrlSocket);
-    }
-#endif
-
-    return Ok();
-}
-
 Result<void> YettyImpl::initEmbeddedAssets() noexcept {
     ydebug("initEmbeddedAssets: starting");
 
@@ -985,9 +746,9 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
         return Ok();
     }
 
-    // Derive cache base directory from Platform::getShadersDir()
-    // Platform returns full paths like "~/.cache/yetty/shaders" - we need the parent
-    std::filesystem::path shadersPath = _fsPathManager->getShadersDir();
+    // Derive cache base directory from config paths/shaders
+    // Config returns full paths like "~/.cache/yetty/shaders" - we need the parent
+    std::filesystem::path shadersPath = _yettyContext.config->get<std::string>("paths/shaders", "");
     std::filesystem::path cacheDir = shadersPath.parent_path();
     ydebug("initEmbeddedAssets: cacheDir={}", cacheDir.string());
 
@@ -1054,43 +815,31 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    // Initialize platform managers
-    auto surfaceResult = SurfaceManager::instance();
-    if (!surfaceResult) {
-        return Err<void>("Failed to get SurfaceManager", surfaceResult);
-    }
-    _surfaceManager = *surfaceResult;
-
-    auto fsPathResult = FsPathManager::instance();
-    if (!fsPathResult) {
-        return Err<void>("Failed to get FsPathManager", fsPathResult);
-    }
-    _fsPathManager = *fsPathResult;
-
-    auto clipboardResult = ClipboardManager::instance();
-    if (!clipboardResult) {
-        return Err<void>("Failed to get ClipboardManager", clipboardResult);
-    }
-    _clipboardManager = *clipboardResult;
-
-    // In headless mode, skip window setup
+    // In headless mode, nothing to initialize here
     if (_vncHeadless) {
-        ydebug("VNC headless mode: managers initialized, skipping window setup");
+        ydebug("VNC headless mode: no window initialization");
         return Ok();
     }
 
-    // Set window icon from embedded resource
-    _surfaceManager->setIcon(gLogoData, gLogoSize);
+    // Get window size from SurfaceManager (singleton, already created by InitManager)
+    auto surfaceResult = SurfaceManager::instance();
+    if (!surfaceResult) {
+        return Err<void>("SurfaceManager not available", surfaceResult);
+    }
+    auto surface = *surfaceResult;
+
+    // Set window icon
+    surface->setIcon(gLogoData, gLogoSize);
 
     // Get actual window size
     int actualW, actualH;
-    _surfaceManager->getWindowSize(actualW, actualH);
+    surface->getWindowSize(actualW, actualH);
     if (actualW > 0 && actualH > 0) {
         _initialWidth = static_cast<uint32_t>(actualW);
         _initialHeight = static_cast<uint32_t>(actualH);
     }
 
-    ydebug("Platform managers initialized, window size {}x{}", actualW, actualH);
+    ydebug("Window initialized, size {}x{}", actualW, actualH);
     return Ok();
 }
 
@@ -1107,21 +856,25 @@ Result<void> YettyImpl::initWebGPU() noexcept {
 
     // Create surface (skip in headless mode)
     if (!_vncHeadless) {
-        _surface = _surfaceManager->createWGPUSurface(_instance);
-        if (_surface) {
-            ydebug("initWebGPU: Surface created");
-        } else {
-            ywarn("initWebGPU: Surface creation failed - will try without surface");
-        }
+        auto surfaceResult = SurfaceManager::instance();
+        if (surfaceResult) {
+            auto surface = *surfaceResult;
+            _surface = surface->createWGPUSurface(_instance);
+            if (_surface) {
+                ydebug("initWebGPU: Surface created");
+            } else {
+                ywarn("initWebGPU: Surface creation failed - will try without surface");
+            }
 
-        // Initialize content scale
-        int fbWidth, fbHeight, winWidth, winHeight;
-        _surfaceManager->getFramebufferSize(fbWidth, fbHeight);
-        _surfaceManager->getWindowSize(winWidth, winHeight);
-        if (winWidth > 0 && winHeight > 0) {
-            _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
-            _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
-            ydebug("Content scale: {}x{}", _contentScaleX, _contentScaleY);
+            // Initialize content scale
+            int fbWidth, fbHeight, winWidth, winHeight;
+            surface->getFramebufferSize(fbWidth, fbHeight);
+            surface->getWindowSize(winWidth, winHeight);
+            if (winWidth > 0 && winHeight > 0) {
+                _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
+                _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
+                ydebug("Content scale: {}x{}", _contentScaleX, _contentScaleY);
+            }
         }
     } else {
         ydebug("initWebGPU: Headless mode - skipping surface creation");
@@ -1889,11 +1642,6 @@ Result<void> YettyImpl::onShutdown() {
     if (_adapter) wgpuAdapterRelease(_adapter);
     if (_instance) wgpuInstanceRelease(_instance);
 
-    // Release platform managers
-    _surfaceManager.reset();
-    _clipboardManager.reset();
-    _fsPathManager.reset();
-
     s_instance = nullptr;
     return result;
 }
@@ -1913,7 +1661,10 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {  // 60 FPS
+    // VNC client mode: render on server frames only, use slow timer (1fps) for status/reconnect
+    // Normal mode: 60 FPS timer drives rendering
+    uint32_t timerIntervalMs = _vncClientMode ? 1000 : 16;
+    if (auto res = loop->configTimer(_frameTimerId, timerIntervalMs); !res) {
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -1997,10 +1748,12 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         event.type == base::Event::Type::ScreenUpdate) {
         ydebug("onEvent: frame timer fired, calling mainLoopIteration");
         // Check if window should close
-        if (_surfaceManager && _surfaceManager->shouldClose()) {
-            ydebug("Window close requested, stopping event loop");
-            (*base::EventLoop::instance())->stop();
-            return Ok(true);
+        if (!_vncHeadless) {
+            if (auto surfaceResult = SurfaceManager::instance(); surfaceResult && (*surfaceResult)->shouldClose()) {
+                ydebug("Window close requested, stopping event loop");
+                (*base::EventLoop::instance())->stop();
+                return Ok(true);
+            }
         }
         // Process GPU events so async callbacks (like render done) can fire
         wgpuInstanceProcessEvents(_instance);
@@ -2013,28 +1766,32 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     }
 
     // SetCursor event: change mouse cursor shape
-    if (event.type == base::Event::Type::SetCursor && _surfaceManager) {
-        int shape = event.setCursor.shape;
-        // Map cursor constants to CursorType
-        CursorType cursorType = CursorType::Arrow;
-        switch (shape) {
-            case 0: cursorType = CursorType::Arrow; break;
-            case 0x00036002: cursorType = CursorType::IBeam; break;
-            case 0x00036004: cursorType = CursorType::Hand; break;
-            case 0x00036005: cursorType = CursorType::ResizeH; break;
-            case 0x00036006: cursorType = CursorType::ResizeV; break;
-            default: cursorType = CursorType::Arrow; break;
+    if (event.type == base::Event::Type::SetCursor && !_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            int shape = event.setCursor.shape;
+            // Map cursor constants to CursorType
+            CursorType cursorType = CursorType::Arrow;
+            switch (shape) {
+                case 0: cursorType = CursorType::Arrow; break;
+                case 0x00036002: cursorType = CursorType::IBeam; break;
+                case 0x00036004: cursorType = CursorType::Hand; break;
+                case 0x00036005: cursorType = CursorType::ResizeH; break;
+                case 0x00036006: cursorType = CursorType::ResizeV; break;
+                default: cursorType = CursorType::Arrow; break;
+            }
+            (*surfaceResult)->setCursor(cursorType);
         }
-        _surfaceManager->setCursor(cursorType);
         return Ok(true);
     }
 
     // Copy event: write selected text to system clipboard
-    if (event.type == base::Event::Type::Copy && event.payload && _clipboardManager) {
-        auto text = std::static_pointer_cast<std::string>(event.payload);
-        if (text && !text->empty()) {
-            _clipboardManager->setText(*text);
-            ydebug("Clipboard: copied {} bytes", text->size());
+    if (event.type == base::Event::Type::Copy && event.payload && !_vncHeadless) {
+        if (auto clipboardResult = ClipboardManager::instance(); clipboardResult) {
+            auto text = std::static_pointer_cast<std::string>(event.payload);
+            if (text && !text->empty()) {
+                (*clipboardResult)->setText(*text);
+                ydebug("Clipboard: copied {} bytes", text->size());
+            }
         }
         return Ok(true);
     }
@@ -2062,13 +1819,19 @@ static void signalHandler(int sig) {
 }
 
 Result<void> YettyImpl::run() noexcept {
-    ydebug("Starting render loop...");
+    ydebug("run: starting");
 
+    // Start async operations in workspaces (propagates to terminals -> SSH)
+    // This must happen before loop->start() so SSH poll handlers are registered
+    for (auto& ws : _workspaces) {
+        if (auto r = ws->run(); !r) {
+            return Err<void>("Failed to run workspace", r);
+        }
+    }
+
+    // Now start the event loop - SSH poll events will fire
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
-
-    // Timer is already started in initEventLoop()
-    // Just start the event loop - blocks on desktop, no-op on Android
     auto loop = *base::EventLoop::instance();
     loop->start();
 
@@ -2129,6 +1892,15 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             float wsH = std::max(1.0f, static_cast<float>(_pendingResizeH) - statusbarHeight);
             _activeWorkspace->resize(static_cast<float>(_pendingResizeW), wsH);
         }
+        // VNC client mode: send resize to server (was deferred because _inRender was true)
+        if (_vncClientMode && _vncClient && _pendingResizeW > 0 && _pendingResizeH > 0) {
+            float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
+            int vncH = static_cast<int>(_pendingResizeH) - static_cast<int>(statusbarH);
+            if (vncH > 0) {
+                _vncClient->sendResize(static_cast<uint16_t>(_pendingResizeW), static_cast<uint16_t>(vncH));
+                ydebug("VNC client sent deferred resize: {}x{}", _pendingResizeW, vncH);
+            }
+        }
     }
 
     // In headless mode with no client connected, skip entire render iteration
@@ -2167,8 +1939,18 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     }
 
     // Update shared uniforms
-    static double lastTime = _surfaceManager->getTime();
-    double now = _surfaceManager->getTime();
+    double now = 0.0;
+    if (!_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            now = (*surfaceResult)->getTime();
+        }
+    } else {
+        // Headless mode: use monotonic clock
+        static auto startTime = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::steady_clock::now() - startTime;
+        now = std::chrono::duration<double>(elapsed).count();
+    }
+    static double lastTime = now;
     float deltaTime = static_cast<float>(now - lastTime);
     lastTime = now;
 
@@ -2178,7 +1960,10 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         windowWidth = _vncRequestedWidth > 0 ? static_cast<int>(_vncRequestedWidth) : static_cast<int>(_initialWidth);
         windowHeight = _vncRequestedHeight > 0 ? static_cast<int>(_vncRequestedHeight) : static_cast<int>(_initialHeight);
     } else {
-        _surfaceManager->getWindowSize(windowWidth, windowHeight);
+        windowWidth = windowHeight = 0;
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->getWindowSize(windowWidth, windowHeight);
+        }
     }
 
     _sharedUniforms.time = static_cast<float>(now);
@@ -2228,7 +2013,6 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     static double lastDbgTime = 0;
     if (_vncHeadless) {
         if (doCapture) captureCount++; else skipCount++;
-        double now = _surfaceManager->getTime();
         if (now - lastDbgTime >= 1.0) {
             ydebug("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
             captureCount = skipCount = 0;
@@ -2477,14 +2261,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (!_vncHeadless || doCapture) {
         _frameCount++;
     }
-    double fpsNow = _surfaceManager->getTime();
-    if (fpsNow - _lastFpsTime >= 1.0) {
+    if (now - _lastFpsTime >= 1.0) {
         ydebug("FPS: {}", _frameCount);
         if (_yettyContext.yguiOverlay) {
             _yettyContext.yguiOverlay->setFps(_frameCount);
         }
         _frameCount = 0;
-        _lastFpsTime = fpsNow;
+        _lastFpsTime = now;
     }
 
     // _inRender cleared by wgpuQueueOnSubmittedWorkDone callback when GPU finishes
@@ -2532,8 +2315,12 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     if (newWidth == 0 || newHeight == 0) return;
 
     // Update content scale (framebuffer / window)
-    int windowWidth, windowHeight;
-    _surfaceManager->getWindowSize(windowWidth, windowHeight);
+    int windowWidth = newWidth, windowHeight = newHeight;
+    if (!_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->getWindowSize(windowWidth, windowHeight);
+        }
+    }
     if (windowWidth > 0 && windowHeight > 0) {
         _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
         _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);

@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 #include <thread>
 #include <atomic>
+#include <future>
 
 namespace yetty {
 
@@ -30,57 +31,86 @@ public:
         return Ok();
     }
 
-    void run(int argc, char** argv) override {
+    Result<void> run(int argc, char** argv) override {
+        ydebug("GlfwInitManager: creating Config");
+
+        // Create Config first (parses argc/argv)
+        auto configResult = Config::create(argc, argv);
+        if (!configResult) {
+            return Err<void>("Failed to create Config", configResult);
+        }
+        auto config = *configResult;
+
         ydebug("GlfwInitManager: spawning render thread");
 
-        std::thread renderThread([this, argc, argv]() {
+        std::promise<Result<void>> resultPromise;
+        auto resultFuture = resultPromise.get_future();
+
+        // Check for headless mode BEFORE creating window
+        bool headless = config->get<bool>("vnc/headless", false);
+
+        std::thread renderThread([this, config, headless, &resultPromise]() {
             ydebug("Render thread started");
 
-            // Create window
-            auto windowResult = GlfwWindowSingleton::instance();
-            if (!windowResult) {
-                yerror("Failed to create window: {}", error_msg(windowResult));
-                stop();
-                return;
+            // Create window (skip in headless mode)
+            if (!headless) {
+                auto windowResult = GlfwWindowSingleton::instance();
+                if (!windowResult) {
+                    resultPromise.set_value(Err<void>("Failed to create window", windowResult));
+                    stop();
+                    return;
+                }
+            } else {
+                ydebug("Headless mode: skipping window creation");
             }
 
-            // Create Yetty
-            auto result = Yetty::create(argc, argv);
-            if (!result) {
-                std::string msg = result.error().message();
-                if (msg != "Help requested") {
-                    yerror("Failed to create Yetty: {}", error_msg(result));
-                }
+            // Create Yetty with Config
+            auto yettyResult = Yetty::create(config);
+            if (!yettyResult) {
+                resultPromise.set_value(Err<void>("Failed to create Yetty", yettyResult));
                 stop();
                 return;
             }
-            auto yetty = *result;
+            auto yetty = *yettyResult;
 
             // Run
             auto runResult = yetty->run();
             if (!runResult) {
-                yerror("Yetty run failed: {}", error_msg(runResult));
+                resultPromise.set_value(Err<void>("Yetty run failed", runResult));
+                stop();
+                return;
             }
 
             // Shutdown
             auto shutdownResult = yetty->shutdown();
             if (!shutdownResult) {
-                yerror("Yetty shutdown failed: {}", error_msg(shutdownResult));
+                resultPromise.set_value(Err<void>("Yetty shutdown failed", shutdownResult));
+                stop();
+                return;
             }
 
             ydebug("Render thread finished");
+            resultPromise.set_value(Ok());
             stop();
         });
 
-        ydebug("GlfwInitManager: starting event loop");
+        ydebug("GlfwInitManager: starting event loop (headless={})", headless);
         _running = true;
-        while (_running) {
-            glfwWaitEvents();
+        if (headless) {
+            // Headless mode: no GLFW window, just wait for render thread
+            // The render thread runs its own event loop (libuv)
+            renderThread.join();
+        } else {
+            // Normal mode: GLFW event loop
+            while (_running) {
+                glfwWaitEvents();
+            }
+            ydebug("GlfwInitManager: event loop ended");
+            renderThread.join();
         }
-        ydebug("GlfwInitManager: event loop ended");
-
-        renderThread.join();
         ydebug("GlfwInitManager: render thread joined");
+
+        return resultFuture.get();
     }
 
 private:

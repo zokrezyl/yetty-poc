@@ -18,10 +18,10 @@ class Config : public virtual Object, public ygui::TreeLike, public ObjectFactor
 public:
   using Ptr = std::shared_ptr<Config>;
 
-  static Result<Ptr>
-  createImpl(ContextType &ctx,
-             const std::string &configPath = "",
-             const YAML::Node &cmdOverrides = YAML::Node()) noexcept;
+  // Create config: parses argc/argv, reads config file, applies env overrides
+  // Priority: CLI args > ENV vars > config file
+  // Use -c/--config to specify custom config file path
+  static Result<Ptr> createImpl(ContextType &ctx, int argc = 0, char *argv[] = nullptr) noexcept;
 
   ~Config() override = default;
 

@@ -105,11 +105,12 @@ add_subdirectory(yrich)
 add_subdirectory(ypaint)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)
-add_subdirectory(ythorvg)
-# yvideo requires dav1d/openh264 not available on WebAssembly
-if(NOT EMSCRIPTEN)
-    add_subdirectory(yvideo)
+# ythorvg requires thorvg which overrides global new/delete - disabled by default
+if(YETTY_ENABLE_THORVG)
+    add_subdirectory(ythorvg)
 endif()
+# yvideo - H.264/AV1 codec support for VNC
+add_subdirectory(yvideo)
 add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(yfsvm)

@@ -32,8 +32,8 @@ public:
     virtual ~InitManager() = default;
 
     // Runs the application - creates Yetty, starts event loop, shuts down
-    // argc/argv passed to Yetty::create() (ignored on Android)
-    virtual void run(int argc = 0, char** argv = nullptr) = 0;
+    // argc/argv used for Config creation
+    virtual Result<void> run(int argc = 0, char** argv = nullptr) = 0;
 
 protected:
     InitManager() = default;

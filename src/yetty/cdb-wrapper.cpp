@@ -278,8 +278,26 @@ private:
 class CdbWriterImpl : public CdbWriter {
 public:
     ~CdbWriterImpl() override {
+        cleanup();
         if (_fd >= 0) {
             close(_fd);
+        }
+    }
+
+    void cleanup() {
+        // Free the linked list of hash pointers
+        struct cdb_hplist* x = _cdbm.head;
+        while (x) {
+            struct cdb_hplist* next = x->next;
+            free(x);
+            x = next;
+        }
+        _cdbm.head = nullptr;
+
+        // Free the split/hash buffer allocated by cdb_make_finish
+        if (_cdbm.split) {
+            free(_cdbm.split);
+            _cdbm.split = nullptr;
         }
     }
 
@@ -307,6 +325,7 @@ public:
         if (!_started) return false;
         int result = cdb_make_finish(&_cdbm);
         _started = false;
+        cleanup();  // Free allocated memory immediately after finish
         if (_fd >= 0) {
             close(_fd);
             _fd = -1;

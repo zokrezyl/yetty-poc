@@ -34,6 +34,14 @@ public:
     return Ok();
   }
 
+  Result<void> run() override {
+    ydebug("Workspace::run() - propagating to tiles");
+    if (_root) {
+      return _root->run();
+    }
+    return Ok();
+  }
+
   Result<void> render(WGPURenderPassEncoder pass) override {
     if (_root) {
       // Update render context before rendering (screen size may have changed)

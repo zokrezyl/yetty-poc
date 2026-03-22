@@ -14,6 +14,12 @@ struct PtyConfig {
     std::string command;         // Command to execute (if empty, start interactive shell)
     uint32_t cols = 80;
     uint32_t rows = 24;
+
+    // SSH mode (if sshHost is non-empty, use SSH instead of local PTY)
+    std::string sshHost;
+    uint16_t sshPort = 22;
+    std::string sshUser;
+    std::string sshIdentityFile;
 };
 
 /**
@@ -72,6 +78,13 @@ public:
      * Set callback for when process exits.
      */
     virtual void setExitCallback(ExitCallback cb) = 0;
+
+    /**
+     * Start async operations (e.g., SSH connect).
+     * Called after init() when event loop is about to start.
+     * Default: no-op for readers that don't need deferred start.
+     */
+    virtual Result<void> run() { return Ok(); }
 };
 
 } // namespace yetty

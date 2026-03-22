@@ -13,7 +13,9 @@
 #include "cards/ypdf/ypdf.h"
 #include "cards/yplot/yplot-card.h"
 #include "cards/ytext/ytext.h"
+#if YETTY_HAS_THORVG
 #include "cards/ythorvg/ythorvg.h"
+#endif
 #include "cards/ywasm/ywasm.h"
 #ifndef __EMSCRIPTEN__
 #include "cards/yvideo/yvideo.h"
@@ -160,12 +162,14 @@ public:
                    return Ok<CardPtr>(*result);
                  });
 
+#if YETTY_HAS_THORVG
     registerCard("ythorvg",
                  [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,
                     uint32_t h, const std::string &args,
                     const std::string &payload) -> Result<CardPtr> {
                    return card::YThorVG::create(ctx, x, y, w, h, args, payload);
                  });
+#endif
 
     registerCard("ywasm",
                  [](const YettyContext &ctx, int32_t x, int32_t y, uint32_t w,

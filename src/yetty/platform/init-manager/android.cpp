@@ -15,6 +15,7 @@
 #include <android_native_app_glue.h>
 #include <thread>
 #include <atomic>
+#include <future>
 #include <cmath>
 
 namespace yetty {
@@ -39,7 +40,7 @@ public:
         return Ok();
     }
 
-    void run(int argc, char** argv) override {
+    Result<void> run(int argc, char** argv) override {
         (void)argc; (void)argv;  // Android ignores argc/argv
         ydebug("AndroidInitManager::run - waiting for window");
 
@@ -55,8 +56,7 @@ public:
         }
 
         if (_app->destroyRequested) {
-            ydebug("AndroidInitManager::run - destroy requested before window ready");
-            return;
+            return Err<void>("Destroy requested before window ready");
         }
 
         // Set window in singleton
@@ -65,25 +65,30 @@ public:
         }
         ydebug("AndroidInitManager::run - window ready");
 
-        // Keep Yetty alive outside the thread
-        Yetty::Ptr yettyInstance;
+        // Create Config (env vars like YETTY_VNC_HEADLESS handled automatically)
+        auto configResult = Config::create(0, nullptr);
+        if (!configResult) {
+            return Err<void>("Failed to create Config", configResult);
+        }
+        auto config = *configResult;
+
+        std::promise<Result<void>> resultPromise;
+        auto resultFuture = resultPromise.get_future();
 
         // Spawn render thread
         ydebug("AndroidInitManager::run - spawning render thread");
-        std::thread renderThread([this, &yettyInstance]() {
+        std::thread renderThread([this, config, &resultPromise]() {
             ydebug("Render thread started");
 
-            // Create Yetty (no argc/argv on Android)
-            int fakeArgc = 1;
-            const char* fakeArgv[] = {"yetty", nullptr};
-            auto result = Yetty::create(fakeArgc, const_cast<char**>(fakeArgv));
-            if (!result) {
-                yerror("Failed to create Yetty: {}", error_msg(result));
+            // Create Yetty with Config
+            auto yettyResult = Yetty::create(config);
+            if (!yettyResult) {
+                resultPromise.set_value(Err<void>("Failed to create Yetty", yettyResult));
                 _running = false;
                 ALooper_wake(ALooper_forThread());
                 return;
             }
-            yettyInstance = *result;
+            auto yetty = *yettyResult;
             ydebug("Yetty created");
 
             // Start event loop
@@ -92,12 +97,16 @@ public:
             ydebug("EventLoop returned");
 
             // Shutdown
-            auto shutdownResult = yettyInstance->shutdown();
+            auto shutdownResult = yetty->shutdown();
             if (!shutdownResult) {
-                yerror("Yetty shutdown failed: {}", error_msg(shutdownResult));
+                resultPromise.set_value(Err<void>("Yetty shutdown failed", shutdownResult));
+                _running = false;
+                ALooper_wake(ALooper_forThread());
+                return;
             }
 
             ydebug("Render thread finished");
+            resultPromise.set_value(Ok());
             _running = false;
             ALooper_wake(ALooper_forThread());
         });
@@ -118,6 +127,8 @@ public:
 
         renderThread.join();
         ydebug("AndroidInitManager::run - render thread joined");
+
+        return resultFuture.get();
     }
 
 private:

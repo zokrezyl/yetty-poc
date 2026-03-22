@@ -22,6 +22,7 @@ public:
   // EventListener - default: don't consume
   Result<bool> onEvent(const Event &event) override { return Ok(false); }
 
+  virtual Result<void> run() = 0;
   virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
   virtual Result<void> resize(float width, float height) = 0;
   virtual Result<void> setRoot(Tile::Ptr tile) = 0;

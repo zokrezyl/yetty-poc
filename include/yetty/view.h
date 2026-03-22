@@ -18,6 +18,10 @@ public:
 
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 
+    // Start async operations (e.g., SSH connect in terminal)
+    // Called after init() when event loop is about to start.
+    virtual Result<void> run() { return Ok(); }
+
     Rect bounds() const { return _bounds; }
     virtual void setBounds(Rect r) { _bounds = r; onBoundsChanged(); }
 

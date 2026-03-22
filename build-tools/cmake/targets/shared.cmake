@@ -21,14 +21,18 @@ include(${YETTY_ROOT}/build-tools/cmake/libs/zlib.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libpng.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/msdfgen.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/cdb.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/thorvg.cmake)
-include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
-# yvideo dependencies (dav1d, openh264, minimp4) - not available on Emscripten
-if(NOT EMSCRIPTEN)
-    include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
-    include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
-    include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
+
+# ThorVG - disabled by default due to global operator new/delete override conflicts
+option(YETTY_ENABLE_THORVG "Enable ThorVG (SVG/Lottie support)" OFF)
+if(YETTY_ENABLE_THORVG)
+    include(${YETTY_ROOT}/build-tools/cmake/thorvg.cmake)
 endif()
+
+include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
+# yvideo dependencies (dav1d, openh264, minimp4)
+include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/wasm3.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libssh2.cmake)
 
@@ -42,6 +46,11 @@ set(YETTY_INCLUDES
 set(YETTY_DEFINITIONS
     CMAKE_SOURCE_DIR="${YETTY_ROOT}"
 )
+
+# Add YETTY_HAS_THORVG definition when thorvg is enabled
+if(YETTY_ENABLE_THORVG)
+    list(APPEND YETTY_DEFINITIONS YETTY_HAS_THORVG=1)
+endif()
 
 # Common libraries to link
 set(YETTY_LIBS

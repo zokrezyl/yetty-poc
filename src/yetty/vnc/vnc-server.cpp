@@ -212,7 +212,7 @@ Result<void> VncServer::start(uint16_t port) {
     _port = port;
     _running = true;
 
-    yerror("VNC server listening on port {} (async) serverFd={} pollId={}", port, _serverFd, _serverPollId);
+    ydebug("VNC server listening on port {} (async) serverFd={} pollId={}", port, _serverFd, _serverPollId);
     return Ok();
 }
 

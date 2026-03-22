@@ -37,6 +37,10 @@ public:
 
   virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 
+  // Start async operations in child views (e.g., SSH connect)
+  // Called after init() when event loop is about to start.
+  virtual Result<void> run() { return Ok(); }
+
   // Default: tiles don't consume events
   Result<bool> onEvent(const Event &event) override { return Ok(false); }
 
