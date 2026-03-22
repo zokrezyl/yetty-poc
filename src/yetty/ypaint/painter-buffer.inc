@@ -51,14 +51,17 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
     }
   });
 
-  // 2b. Extend scene bounds for new glyphs (MUST happen before cell size
-  // computation!) - ALWAYS extend for glyphs, even with explicit bounds
-  for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
-    const auto &g = _glyphs[gi];
-    _sceneMinX = std::min(_sceneMinX, g.x);
-    _sceneMinY = std::min(_sceneMinY, g.y);
-    _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
-    _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
+  // 2b. Extend scene bounds for new glyphs (only if no explicit bounds set)
+  // In scrolling mode with explicit bounds (terminal viewport), content is
+  // positioned within fixed bounds and should not extend them.
+  if (!_hasExplicitBounds) {
+    for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
+      const auto &g = _glyphs[gi];
+      _sceneMinX = std::min(_sceneMinX, g.x);
+      _sceneMinY = std::min(_sceneMinY, g.y);
+      _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
+      _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
+    }
   }
 
   // 3. Process images
@@ -118,6 +121,9 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
   // Update canvas with scene bounds and cell size
   _canvas->setSceneBounds(_sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
   _canvas->setCellSize(_cellSizeX, _cellSizeY);
+  ydebug("addYpaintBuffer: cellSize=({:.1f}, {:.1f}) cursor=({}, {}) scene=[{:.0f},{:.0f}]-[{:.0f},{:.0f}]",
+         _cellSizeX, _cellSizeY, _cursorCol, _cursorRow,
+         _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
   // 6. Compute content bounds
   float contentMinY = 1e10f;

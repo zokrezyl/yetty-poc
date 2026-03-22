@@ -41,15 +41,6 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // Read flags (offset 14) and heightCells with cursorRow (offset 13)
-    let heightCellsPacked = cardMetadata[metaOffset + 13u];
-    let flagsPacked = cardMetadata[metaOffset + 14u];
-    let flags = flagsPacked & 0xFFFFu;
-    let isScrollingMode = (flags & 64u) != 0u;  // FLAG_SCROLLING_MODE = 64
-
-    // In scrolling mode, upper 16 bits of heightCells contains cursorRow
-    let cursorRow = select(0u, (heightCellsPacked >> 16u) & 0xFFFFu, isScrollingMode);
-
     // For full-screen overlay, map pixel position directly to scene coordinates
     // The scene bounds define where content is placed
     let contentW = contentMaxX - contentMinX;
@@ -64,12 +55,12 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
     );
 
     // Grid lookup - compute scene-relative cell
+    // Canvas stores primitives at scene-relative rows. The gridOffset in each
+    // primitive handles visual translation to cursor position during SDF eval.
     let invCellSizeX = 1.0 / cellSizeX;
     let invCellSizeY = 1.0 / cellSizeY;
     let cellX = u32(clamp((scenePos.x - contentMinX) * invCellSizeX, 0.0, f32(gridWidth - 1u)));
-    let sceneCellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(gridHeight - 1u)));
-    // In scrolling mode, add cursorRow to get the actual grid cell index
-    let cellY = min(sceneCellY + cursorRow, gridHeight - 1u);
+    let cellY = u32(clamp((scenePos.y - contentMinY) * invCellSizeY, 0.0, f32(gridHeight - 1u)));
     let cellIndex = cellY * gridWidth + cellX;
 
     // Variable-length grid lookup

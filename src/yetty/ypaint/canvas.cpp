@@ -116,15 +116,18 @@ public:
                     float aabbMaxX, float aabbMaxY) override {
     float baseY = (_sceneMinY > 1e9f) ? 0.0f : _sceneMinY;
 
-    // Local row range within primitive's AABB (not offset by cursor)
+    // Compute row range from primitive's AABB in scene coordinates.
+    // In scrolling mode, we store at SCENE-RELATIVE rows (not cursor-offset).
+    // The gridOffset in each primitive handles visual translation to cursor position.
+    // This allows multiple primitives drawn at different cursor positions to coexist.
     uint16_t localMinRow = static_cast<uint16_t>(
         std::max(0, static_cast<int32_t>(std::floor((aabbMinY - baseY) / _cellSizeY))));
     uint16_t localMaxRow = static_cast<uint16_t>(
         std::max(0, static_cast<int32_t>(std::floor((aabbMaxY - baseY) / _cellSizeY))));
 
-    // In scrolling mode, grid rows are offset by cursor position
-    uint16_t primMinRow = _scrollingMode ? (_cursorRow + localMinRow) : localMinRow;
-    uint16_t primMaxRow = _scrollingMode ? (_cursorRow + localMaxRow) : localMaxRow;
+    // Store at scene-relative rows (gridOffset handles cursor translation in shader)
+    uint16_t primMinRow = localMinRow;
+    uint16_t primMaxRow = localMaxRow;
 
     ensureLines(primMaxRow + 1);
 

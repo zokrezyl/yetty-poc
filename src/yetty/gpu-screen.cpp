@@ -4066,6 +4066,8 @@ void GPUScreenImpl::handleYpaintOSC(const std::string &payload, bool scrolling) 
       VTermPos cursor;
       VTermState *state = vterm_obtain_state(_vterm);
       vterm_state_get_cursorpos(state, &cursor);
+      ydebug("handleYpaintOSC: vterm cursor at ({}, {}), setting painter cursor",
+             cursor.col, cursor.row);
       painter->setCursorPosition(static_cast<uint16_t>(cursor.col),
                                  static_cast<uint16_t>(cursor.row));
     }
