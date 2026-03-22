@@ -387,23 +387,15 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     initEventLoop();
 
 #if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
-    // Create RPC server and write socket path to config BEFORE workspace/terminal
-    // (Terminal reads shell/env from config when forking the shell)
-    if (_yettyContext.config->get<bool>("rpc/enabled", true)) {
-        auto runtimeDir = _yettyContext.config->get<std::string>("paths/runtime", "/tmp");
-        auto socketResult = rpc::createSocketPath(runtimeDir);
-        if (!socketResult) {
-            return Err<void>("Failed to create RPC socket path", socketResult);
-        }
-        auto rpcResult = rpc::RpcServer::create(*socketResult);
+    // Create RPC server (config already has rpc/enabled and rpc/socket-path set)
+    if (_yettyContext.config->get<bool>("rpc/enabled", false)) {
+        auto socketPath = _yettyContext.config->get<std::string>("rpc/socket-path", "");
+        auto rpcResult = rpc::RpcServer::create(socketPath);
         if (!rpcResult) {
             return Err<void>("Failed to create RPC server", rpcResult);
         }
         _rpcServer = *rpcResult;
-
-        _yettyContext.config->setString("rpc/socket-path", _rpcServer->socketPath());
-        _yettyContext.config->setString("shell/env/YETTY_SOCKET", _rpcServer->socketPath());
-
+        _yettyContext.config->setString("shell/env/YETTY_SOCKET", socketPath);
         rpc::registerEventLoopHandlers(*_rpcServer);
     }
 #endif

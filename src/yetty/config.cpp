@@ -290,6 +290,7 @@ public:
         args::Flag vncUseH264Flag(parser, "vnc-use-h264", "H.264", {"vnc-use-h264"});
         args::ValueFlag<std::string> vncTestFlag(parser, "PATTERN", "VNC test", {"vnc-test"});
         args::Flag captureBenchmarkFlag(parser, "capture-benchmark", "Capture benchmark", {"capture-benchmark"});
+        args::ValueFlag<std::string> rpcSocketFlag(parser, "PATH", "RPC socket path (enables RPC)", {"rpc-socket"});
         args::Flag ytraceDefaultOnFlag(parser, "ytrace-default-on", "Enable all ytrace points", {"ytrace-default-on"});
         args::ValueFlag<std::string> ytraceOutFlag(parser, "FILE", "ytrace output file", {"ytrace-out"});
         args::ValueFlag<std::string> ytraceCtrlSocketFlag(parser, "PATH", "ytrace control socket", {"ytrace-ctrl-socket"});
@@ -341,6 +342,18 @@ public:
         }
         if (sshIdentityFlag) {
             set(DataPath("ssh/identity-file"), Value(args::get(sshIdentityFlag)));
+        }
+        if (rpcSocketFlag) {
+            // CLI override: exact socket path
+            set(DataPath("rpc/enabled"), Value(true));
+            set(DataPath("rpc/socket-path"), Value(args::get(rpcSocketFlag)));
+        } else if (Config::get<bool>("rpc/enabled", true)) {
+            // Generate socket path from socket-dir or paths/runtime
+            std::string dir = Config::get<std::string>("rpc/socket-dir", "");
+            if (dir.empty()) {
+                dir = Config::get<std::string>("paths/runtime", "/tmp");
+            }
+            set(DataPath("rpc/socket-path"), Value(dir + "/yetty-" + std::to_string(getpid()) + ".sock"));
         }
         if (msdfProviderFlag) set(DataPath("rendering/msdf-provider"), Value(args::get(msdfProviderFlag)));
 
