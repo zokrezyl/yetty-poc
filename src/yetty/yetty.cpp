@@ -720,15 +720,6 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
         };
     }
 
-    // TEMPORARY: Start event loop here at end of init for SSH testing
-    // (SSH poll events need uv_run to be called)
-    ydebug("init: starting event loop (TEMPORARY - moved from run())");
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
-    auto loop = *base::EventLoop::instance();
-    loop->start();
-    ydebug("init: event loop returned");
-
     return Ok();
 }
 
@@ -1828,8 +1819,21 @@ static void signalHandler(int sig) {
 }
 
 Result<void> YettyImpl::run() noexcept {
-    // TEMPORARY: Event loop now started at end of init() for SSH testing
-    ydebug("run() - no-op (event loop started in init)");
+    ydebug("run: starting");
+
+    // Start async operations in workspaces (propagates to terminals -> SSH)
+    // This must happen before loop->start() so SSH poll handlers are registered
+    for (auto& ws : _workspaces) {
+        if (auto r = ws->run(); !r) {
+            return Err<void>("Failed to run workspace", r);
+        }
+    }
+
+    // Now start the event loop - SSH poll events will fire
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+    auto loop = *base::EventLoop::instance();
+    loop->start();
 
     ydebug("Run finished.");
 

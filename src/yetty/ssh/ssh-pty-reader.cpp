@@ -36,6 +36,13 @@ Result<void> SshPtyReader::init(const PtyConfig& config, const SshConfig& sshCon
         sendToTerminal(msg);
     });
 
+    ydebug("SshPtyReader::init DONE - connection will start in run()");
+    return Ok();
+}
+
+Result<void> SshPtyReader::run() {
+    ydebug("SshPtyReader::run BEGIN {}@{}:{}", _sshConfig.username, _sshConfig.host, _sshConfig.port);
+
     // Show connection attempt message
     std::string connectMsg = "\033[1;36mConnecting to ";
     if (!_sshConfig.username.empty()) {
@@ -45,24 +52,24 @@ Result<void> SshPtyReader::init(const PtyConfig& config, const SshConfig& sshCon
     sendToTerminal(connectMsg);
 
     // Start async connection - returns immediately
-    ydebug("SshPtyReader::init: calling connectNoAuth");
+    ydebug("SshPtyReader::run: calling connectNoAuth");
     auto res = _client->connectNoAuth(_sshConfig);
-    ydebug("SshPtyReader::init: connectNoAuth returned");
+    ydebug("SshPtyReader::run: connectNoAuth returned");
     if (!res) {
         // Connection setup failed immediately (e.g., DNS resolution)
         std::string errMsg = "\033[1;31mConnection failed: " + res.error().message() + "\033[0m\r\n";
         sendToTerminal(errMsg);
         _state = SshState::Disconnected;
-        ydebug("SshPtyReader::init: connection failed immediately: {}", res.error().message());
+        ydebug("SshPtyReader::run: connection failed immediately: {}", res.error().message());
         // Still return Ok - we displayed the error in the terminal
         return Ok();
     }
 
     // Connection is in progress (async)
     // State machine will advance via poll events
-    _state = SshState::Authenticating;  // Or could be a "Connecting" state
+    _state = SshState::Authenticating;
 
-    ydebug("SshPtyReader::init DONE - async connect started to {}@{}:{}",
+    ydebug("SshPtyReader::run DONE - async connect started to {}@{}:{}",
            _sshConfig.username, _sshConfig.host, _sshConfig.port);
     return Ok();
 }

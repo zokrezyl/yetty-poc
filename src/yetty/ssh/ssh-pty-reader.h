@@ -1,6 +1,7 @@
 #pragma once
 
 #include <yetty/platform/pty-reader.h>
+#include <yetty/result.hpp>
 #include "ssh-client.h"
 #include <deque>
 #include <string>
@@ -20,6 +21,7 @@ public:
     ~SshPtyReader() override;
 
     Result<void> init(const PtyConfig& config, const SshConfig& sshConfig);
+    Result<void> run() override;
 
     size_t read(char* buf, size_t maxLen) override;
     void write(const char* data, size_t len) override;

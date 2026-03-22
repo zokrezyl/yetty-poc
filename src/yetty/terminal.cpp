@@ -74,6 +74,14 @@ public:
         return Ok();
     }
 
+    Result<void> run() override {
+        ydebug("Terminal::run() - starting PtyReader async operations");
+        if (_ptyReader) {
+            return _ptyReader->run();
+        }
+        return Ok();
+    }
+
     Result<void> onShutdown() override {
         Result<void> result = Ok();
 

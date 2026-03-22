@@ -19,6 +19,10 @@ public:
 
     virtual bool isRunning() const = 0;
 
+    // Start async operations (e.g., SSH connect)
+    // Called after init() when event loop is about to start.
+    virtual Result<void> run() = 0;
+
     // Rendering
     virtual Result<void> render(WGPURenderPassEncoder pass) = 0;
 
