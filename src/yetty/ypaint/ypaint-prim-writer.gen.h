@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <ostream>
+#include <iomanip>
 #include <vector>
 
 // Forward declaration — include ydraw-types.gen.h for full enum
@@ -1080,6 +1082,984 @@ inline uint32_t wordCountForType(uint32_t type) {
     case 134u: return 13; // RadialGradientCircle
     default: return 0;
     }
+}
+
+/// Return type name for a given SDF type ID.
+inline const char* typeNameForId(uint32_t type) {
+    switch (type) {
+    case 0u: return "Circle";
+    case 1u: return "Box";
+    case 2u: return "Segment";
+    case 3u: return "Triangle";
+    case 4u: return "Bezier2";
+    case 5u: return "Bezier3";
+    case 6u: return "Ellipse";
+    case 7u: return "Arc";
+    case 8u: return "RoundedBox";
+    case 9u: return "Rhombus";
+    case 10u: return "Pentagon";
+    case 11u: return "Hexagon";
+    case 12u: return "Star";
+    case 13u: return "Pie";
+    case 14u: return "Ring";
+    case 15u: return "Heart";
+    case 16u: return "Cross";
+    case 17u: return "RoundedX";
+    case 18u: return "Capsule";
+    case 19u: return "Moon";
+    case 20u: return "Egg";
+    case 21u: return "ChamferBox";
+    case 22u: return "OrientedBox";
+    case 23u: return "Trapezoid";
+    case 24u: return "Parallelogram";
+    case 25u: return "EquilateralTriangle";
+    case 26u: return "IsoscelesTriangle";
+    case 27u: return "UnevenCapsule";
+    case 28u: return "Octogon";
+    case 29u: return "Hexagram";
+    case 30u: return "Pentagram";
+    case 31u: return "CutDisk";
+    case 32u: return "Horseshoe";
+    case 33u: return "Vesica";
+    case 34u: return "OrientedVesica";
+    case 35u: return "RoundedCross";
+    case 36u: return "Parabola";
+    case 37u: return "BlobbyCross";
+    case 38u: return "Tunnel";
+    case 39u: return "Stairs";
+    case 40u: return "QuadraticCircle";
+    case 41u: return "Hyperbola";
+    case 42u: return "CoolS";
+    case 43u: return "CircleWave";
+    case 44u: return "ColorWheel";
+    case 64u: return "TextGlyph";
+    case 65u: return "RotatedGlyph";
+    case 100u: return "Sphere3D";
+    case 101u: return "Box3D";
+    case 103u: return "Torus3D";
+    case 105u: return "Cylinder3D";
+    case 108u: return "VerticalCapsule3D";
+    case 110u: return "CappedCone3D";
+    case 115u: return "Octahedron3D";
+    case 116u: return "Pyramid3D";
+    case 117u: return "Ellipsoid3D";
+    case 128u: return "Plot";
+    case 129u: return "Image";
+    case 130u: return "Polygon";
+    case 131u: return "PolygonGroup";
+    case 132u: return "LinearGradientBox";
+    case 133u: return "LinearGradientCircle";
+    case 134u: return "RadialGradientCircle";
+    default: return "Unknown";
+    }
+}
+
+/// Dump a primitive's fields to a string stream.
+/// GPU layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
+/// Returns word count consumed (including gridOffset).
+inline uint32_t dumpPrimitive(std::ostream& os, const float* buf, uint32_t primIdx) {
+    // gridOffset at [0], type at [1]
+    uint32_t gridOffsetPacked = detail::read_u32(buf, 0);
+    int16_t gridOffX = static_cast<int16_t>(gridOffsetPacked & 0xFFFF);
+    int16_t gridOffY = static_cast<int16_t>((gridOffsetPacked >> 16) & 0xFFFF);
+    uint32_t primType = detail::read_u32(buf, 1);
+    uint32_t wc = wordCountForType(primType);
+    os << "  [" << primIdx << "] " << typeNameForId(primType) << " (type=" << primType << ", words=" << wc << ")\n";
+    os << "    gridOffset: (" << gridOffX << ", " << gridOffY << ")\n";
+    if (wc == 0) {
+        os << "    <unknown type>\n";
+        return 1;
+    }
+    switch (primType) {
+    case 0u: { // Circle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 1u: { // Box
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    hw: " << buf[5] << "\n";
+        os << "    hh: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 2u: { // Segment
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    x0: " << buf[3] << "\n";
+        os << "    y0: " << buf[4] << "\n";
+        os << "    x1: " << buf[5] << "\n";
+        os << "    y1: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 3u: { // Triangle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    ax: " << buf[3] << "\n";
+        os << "    ay: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    vx: " << buf[7] << "\n";
+        os << "    vy: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 4u: { // Bezier2
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    ax: " << buf[3] << "\n";
+        os << "    ay: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    cx: " << buf[7] << "\n";
+        os << "    cy: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 5u: { // Bezier3
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    ax: " << buf[3] << "\n";
+        os << "    ay: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    cx: " << buf[7] << "\n";
+        os << "    cy: " << buf[8] << "\n";
+        os << "    dx: " << buf[9] << "\n";
+        os << "    dy: " << buf[10] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[13] << "\n";
+        os << "    round: " << buf[14] << "\n";
+        return 15;
+    }
+    case 6u: { // Ellipse
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    rx: " << buf[5] << "\n";
+        os << "    ry: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 7u: { // Arc
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    sc_x: " << buf[5] << "\n";
+        os << "    sc_y: " << buf[6] << "\n";
+        os << "    ra: " << buf[7] << "\n";
+        os << "    rb: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 8u: { // RoundedBox
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    hw: " << buf[5] << "\n";
+        os << "    hh: " << buf[6] << "\n";
+        os << "    r0: " << buf[7] << "\n";
+        os << "    r1: " << buf[8] << "\n";
+        os << "    r2: " << buf[9] << "\n";
+        os << "    r3: " << buf[10] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[13] << "\n";
+        os << "    round: " << buf[14] << "\n";
+        return 15;
+    }
+    case 9u: { // Rhombus
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 10u: { // Pentagon
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 11u: { // Hexagon
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 12u: { // Star
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    n: " << buf[6] << "\n";
+        os << "    m: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 13u: { // Pie
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    sc_x: " << buf[5] << "\n";
+        os << "    sc_y: " << buf[6] << "\n";
+        os << "    r: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 14u: { // Ring
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    nx: " << buf[5] << "\n";
+        os << "    ny: " << buf[6] << "\n";
+        os << "    r: " << buf[7] << "\n";
+        os << "    th: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 15u: { // Heart
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    scale: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 16u: { // Cross
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    r: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 17u: { // RoundedX
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    w: " << buf[5] << "\n";
+        os << "    r: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 18u: { // Capsule
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    ax: " << buf[3] << "\n";
+        os << "    ay: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    r: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 19u: { // Moon
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    d: " << buf[5] << "\n";
+        os << "    ra: " << buf[6] << "\n";
+        os << "    rb: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 20u: { // Egg
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    ra: " << buf[5] << "\n";
+        os << "    rb: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 21u: { // ChamferBox
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    hw: " << buf[5] << "\n";
+        os << "    hh: " << buf[6] << "\n";
+        os << "    chamfer: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 22u: { // OrientedBox
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    ax: " << buf[3] << "\n";
+        os << "    ay: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    th: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 23u: { // Trapezoid
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r1: " << buf[5] << "\n";
+        os << "    r2: " << buf[6] << "\n";
+        os << "    he: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 24u: { // Parallelogram
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    wi: " << buf[5] << "\n";
+        os << "    he: " << buf[6] << "\n";
+        os << "    sk: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 25u: { // EquilateralTriangle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 26u: { // IsoscelesTriangle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    qx: " << buf[5] << "\n";
+        os << "    qy: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 27u: { // UnevenCapsule
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r1: " << buf[5] << "\n";
+        os << "    r2: " << buf[6] << "\n";
+        os << "    h: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 28u: { // Octogon
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 29u: { // Hexagram
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 30u: { // Pentagram
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 31u: { // CutDisk
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 32u: { // Horseshoe
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    sc_x: " << buf[5] << "\n";
+        os << "    sc_y: " << buf[6] << "\n";
+        os << "    r: " << buf[7] << "\n";
+        os << "    wx: " << buf[8] << "\n";
+        os << "    wy: " << buf[9] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[12] << "\n";
+        os << "    round: " << buf[13] << "\n";
+        return 14;
+    }
+    case 33u: { // Vesica
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    w: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 34u: { // OrientedVesica
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    ax: " << buf[3] << "\n";
+        os << "    ay: " << buf[4] << "\n";
+        os << "    bx: " << buf[5] << "\n";
+        os << "    by: " << buf[6] << "\n";
+        os << "    w: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 35u: { // RoundedCross
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    h: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 36u: { // Parabola
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    k: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 37u: { // BlobbyCross
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    he: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 38u: { // Tunnel
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    wh_x: " << buf[5] << "\n";
+        os << "    wh_y: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 39u: { // Stairs
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    wh_x: " << buf[5] << "\n";
+        os << "    wh_y: " << buf[6] << "\n";
+        os << "    n: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 40u: { // QuadraticCircle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    scale: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 41u: { // Hyperbola
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    k: " << buf[5] << "\n";
+        os << "    he: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 42u: { // CoolS
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    scale: " << buf[5] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[8] << "\n";
+        os << "    round: " << buf[9] << "\n";
+        return 10;
+    }
+    case 43u: { // CircleWave
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    tb: " << buf[5] << "\n";
+        os << "    ra: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 44u: { // ColorWheel
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    outerR: " << buf[5] << "\n";
+        os << "    innerR: " << buf[6] << "\n";
+        os << "    hue: " << buf[7] << "\n";
+        os << "    sat: " << buf[8] << "\n";
+        os << "    val: " << buf[9] << "\n";
+        os << "    indicatorSize: " << buf[10] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[13] << "\n";
+        os << "    round: " << buf[14] << "\n";
+        return 15;
+    }
+    case 64u: { // TextGlyph
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    x: " << buf[3] << "\n";
+        os << "    y: " << buf[4] << "\n";
+        os << "    scaleX: " << buf[5] << "\n";
+        os << "    scaleY: " << buf[6] << "\n";
+        os << "    glyphIndex: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 65u: { // RotatedGlyph
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    x: " << buf[3] << "\n";
+        os << "    y: " << buf[4] << "\n";
+        os << "    scaleX: " << buf[5] << "\n";
+        os << "    scaleY: " << buf[6] << "\n";
+        os << "    angle: " << buf[7] << "\n";
+        os << "    glyphIndex: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    cosAngle: " << buf[9] << "\n";
+        os << "    sinAngle: " << buf[10] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[13] << "\n";
+        os << "    round: " << buf[14] << "\n";
+        return 15;
+    }
+    case 100u: { // Sphere3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    r: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 101u: { // Box3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    bx: " << buf[6] << "\n";
+        os << "    by: " << buf[7] << "\n";
+        os << "    bz: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 103u: { // Torus3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    majorR: " << buf[6] << "\n";
+        os << "    minorR: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 105u: { // Cylinder3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    r: " << buf[6] << "\n";
+        os << "    h: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 108u: { // VerticalCapsule3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    r: " << buf[7] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[10] << "\n";
+        os << "    round: " << buf[11] << "\n";
+        return 12;
+    }
+    case 110u: { // CappedCone3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    r1: " << buf[7] << "\n";
+        os << "    r2: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 115u: { // Octahedron3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    s: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 116u: { // Pyramid3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[9] << "\n";
+        os << "    round: " << buf[10] << "\n";
+        return 11;
+    }
+    case 117u: { // Ellipsoid3D
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    px: " << buf[3] << "\n";
+        os << "    py: " << buf[4] << "\n";
+        os << "    pz: " << buf[5] << "\n";
+        os << "    rx: " << buf[6] << "\n";
+        os << "    ry: " << buf[7] << "\n";
+        os << "    rz: " << buf[8] << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[11] << "\n";
+        os << "    round: " << buf[12] << "\n";
+        return 13;
+    }
+    case 128u: { // Plot
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    x: " << buf[3] << "\n";
+        os << "    y: " << buf[4] << "\n";
+        os << "    w: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    dataCount: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    minVal: " << buf[8] << "\n";
+        os << "    maxVal: " << buf[9] << "\n";
+        os << "    flags: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    lineColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    bgColor: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        return 13;
+    }
+    case 129u: { // Image
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    x: " << buf[3] << "\n";
+        os << "    y: " << buf[4] << "\n";
+        os << "    w: " << buf[5] << "\n";
+        os << "    h: " << buf[6] << "\n";
+        os << "    atlasX: 0x" << std::hex << detail::read_u32(buf, 7) << std::dec << "\n";
+        os << "    atlasY: 0x" << std::hex << detail::read_u32(buf, 8) << std::dec << "\n";
+        os << "    texW: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    texH: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        return 11;
+    }
+    case 130u: { // Polygon
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    vertexCount: 0x" << std::hex << detail::read_u32(buf, 3) << std::dec << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 4) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 5) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[6] << "\n";
+        os << "    round: " << buf[7] << "\n";
+        return 8;
+    }
+    case 131u: { // PolygonGroup
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    vertexCount: 0x" << std::hex << detail::read_u32(buf, 3) << std::dec << "\n";
+        os << "    contourCount: 0x" << std::hex << detail::read_u32(buf, 4) << std::dec << "\n";
+        os << "    fillColor: 0x" << std::hex << detail::read_u32(buf, 5) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 6) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[7] << "\n";
+        os << "    round: " << buf[8] << "\n";
+        return 9;
+    }
+    case 132u: { // LinearGradientBox
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    hw: " << buf[5] << "\n";
+        os << "    hh: " << buf[6] << "\n";
+        os << "    gx1: " << buf[7] << "\n";
+        os << "    gy1: " << buf[8] << "\n";
+        os << "    gx2: " << buf[9] << "\n";
+        os << "    gy2: " << buf[10] << "\n";
+        os << "    color1: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    color2: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 13) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[14] << "\n";
+        os << "    round: " << buf[15] << "\n";
+        return 16;
+    }
+    case 133u: { // LinearGradientCircle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    gx1: " << buf[6] << "\n";
+        os << "    gy1: " << buf[7] << "\n";
+        os << "    gx2: " << buf[8] << "\n";
+        os << "    gy2: " << buf[9] << "\n";
+        os << "    color1: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    color2: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 12) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[13] << "\n";
+        os << "    round: " << buf[14] << "\n";
+        return 15;
+    }
+    case 134u: { // RadialGradientCircle
+        os << "    type: 0x" << std::hex << detail::read_u32(buf, 1) << std::dec << "\n";
+        os << "    layer: 0x" << std::hex << detail::read_u32(buf, 2) << std::dec << "\n";
+        os << "    cx: " << buf[3] << "\n";
+        os << "    cy: " << buf[4] << "\n";
+        os << "    r: " << buf[5] << "\n";
+        os << "    gcx: " << buf[6] << "\n";
+        os << "    gcy: " << buf[7] << "\n";
+        os << "    gr: " << buf[8] << "\n";
+        os << "    color1: 0x" << std::hex << detail::read_u32(buf, 9) << std::dec << "\n";
+        os << "    color2: 0x" << std::hex << detail::read_u32(buf, 10) << std::dec << "\n";
+        os << "    strokeColor: 0x" << std::hex << detail::read_u32(buf, 11) << std::dec << "\n";
+        os << "    strokeWidth: " << buf[12] << "\n";
+        os << "    round: " << buf[13] << "\n";
+        return 14;
+    }
+    default: return 1;
+    }
+}
+
+/// Dump entire GPU buffer in staging format: [offset_table][prim_data...]
+/// primCount = number of primitives, buf = start of buffer, bufWords = total words
+inline void dumpGpuBuffer(std::ostream& os, const float* buf, uint32_t primCount, uint32_t bufWords) {
+    os << "=== GPU Buffer Dump: " << primCount << " primitives, " << bufWords << " words ===\n";
+    if (primCount == 0 || bufWords == 0) return;
+    os << "Offset table (word offsets):\n";
+    const uint32_t* offsets = reinterpret_cast<const uint32_t*>(buf);
+    for (uint32_t i = 0; i < primCount && i < bufWords; i++) {
+        os << "  [" << i << "] -> " << offsets[i] << "\n";
+    }
+    os << "Primitive data:\n";
+    const float* dataBase = buf + primCount;
+    for (uint32_t i = 0; i < primCount; i++) {
+        uint32_t wordOff = offsets[i];
+        if (primCount + wordOff >= bufWords) {
+            os << "  [" << i << "] <out of bounds: off=" << wordOff << ">\n";
+            continue;
+        }
+        dumpPrimitive(os, dataBase + wordOff, i);
+    }
+    os << "=== End GPU Buffer Dump ===\n";
 }
 
 /// Translate grid entries from primitive indices to word offsets.

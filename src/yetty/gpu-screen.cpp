@@ -6003,14 +6003,12 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
   _uniforms.visualZoomOffsetY = _visualZoomOffsetY;
 
   // YPaint overlay painters - set slot indices if painters have content
-  _uniforms.ypaintScrollingSlot =
-      (_scrollingPainter && _scrollingPainter->primitiveCount() > 0)
-          ? SCROLLING_PAINTER_SLOT
-          : 0;
-  _uniforms.ypaintOverlaySlot =
-      (_overlayPainter && _overlayPainter->primitiveCount() > 0)
-          ? OVERLAY_PAINTER_SLOT
-          : 0;
+  bool scrollingHasContent = _scrollingPainter && _scrollingPainter->hasContent();
+  _uniforms.ypaintScrollingSlot = scrollingHasContent ? SCROLLING_PAINTER_SLOT : 0;
+  ydebug("ypaintScrollingSlot={} (hasContent={})", _uniforms.ypaintScrollingSlot, scrollingHasContent);
+
+  bool overlayHasContent = _overlayPainter && _overlayPainter->hasContent();
+  _uniforms.ypaintOverlaySlot = overlayHasContent ? OVERLAY_PAINTER_SLOT : 0;
 
   wgpuQueueWriteBuffer(queue, _uniformBuffer, 0, &_uniforms, sizeof(Uniforms));
 

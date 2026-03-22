@@ -738,6 +738,8 @@ def generate_writer(primitives: list[dict], out: Path) -> None:
     L.append("#pragma once\n")
     L.append("#include <cstdint>")
     L.append("#include <cstring>")
+    L.append("#include <ostream>")
+    L.append("#include <iomanip>")
     L.append("#include <vector>\n")
     L.append("// Forward declaration — include ydraw-types.gen.h for full enum")
     L.append("namespace yetty::card { enum class SDFType : uint32_t; struct SDFPrimitive; }\n")
@@ -801,6 +803,82 @@ def generate_writer(primitives: list[dict], out: Path) -> None:
         L.append(f"    case {prim['id']}u: return {prim['_word_count']}; // {prim['name']}")
     L.append("    default: return 0;")
     L.append("    }")
+    L.append("}\n")
+
+    # --- typeNameForId: type ID → string name ---
+    L.append("/// Return type name for a given SDF type ID.")
+    L.append("inline const char* typeNameForId(uint32_t type) {")
+    L.append("    switch (type) {")
+    for prim in primitives:
+        fields = prim.get("fields", [])
+        if not fields:
+            continue
+        L.append(f'    case {prim["id"]}u: return "{prim["name"]}";')
+    L.append('    default: return "Unknown";')
+    L.append("    }")
+    L.append("}\n")
+
+    # --- dumpPrimitive: dump a primitive's fields to string ---
+    # GPU layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry
+    # All field offsets shifted by +1 to account for gridOffset prefix
+    L.append("/// Dump a primitive's fields to a string stream.")
+    L.append("/// GPU layout: [0]=gridOffset, [1]=type, [2]=layer, [3+]=geometry")
+    L.append("/// Returns word count consumed (including gridOffset).")
+    L.append("inline uint32_t dumpPrimitive(std::ostream& os, const float* buf, uint32_t primIdx) {")
+    L.append("    // gridOffset at [0], type at [1]")
+    L.append("    uint32_t gridOffsetPacked = detail::read_u32(buf, 0);")
+    L.append("    int16_t gridOffX = static_cast<int16_t>(gridOffsetPacked & 0xFFFF);")
+    L.append("    int16_t gridOffY = static_cast<int16_t>((gridOffsetPacked >> 16) & 0xFFFF);")
+    L.append("    uint32_t primType = detail::read_u32(buf, 1);")
+    L.append("    uint32_t wc = wordCountForType(primType);")
+    L.append("    os << \"  [\" << primIdx << \"] \" << typeNameForId(primType) << \" (type=\" << primType << \", words=\" << wc << \")\\n\";")
+    L.append("    os << \"    gridOffset: (\" << gridOffX << \", \" << gridOffY << \")\\n\";")
+    L.append("    if (wc == 0) {")
+    L.append("        os << \"    <unknown type>\\n\";")
+    L.append("        return 1;")
+    L.append("    }")
+    L.append("    switch (primType) {")
+    for prim in primitives:
+        fields = prim.get("fields", [])
+        if not fields:
+            continue
+        L.append(f"    case {prim['id']}u: {{ // {prim['name']}")
+        for field in fields:
+            # +1 shift for gridOffset prefix
+            off = prim["_offset_map"][field["name"]][0] + 1
+            fname = field["name"]
+            if field["type"] == "u32":
+                L.append(f'        os << "    {fname}: 0x" << std::hex << detail::read_u32(buf, {off}) << std::dec << "\\n";')
+            else:
+                L.append(f'        os << "    {fname}: " << buf[{off}] << "\\n";')
+        L.append(f"        return {prim['_word_count'] + 1};")  # +1 for gridOffset
+        L.append("    }")
+    L.append("    default: return 1;")
+    L.append("    }")
+    L.append("}\n")
+
+    # --- dumpGpuBuffer: dump entire GPU buffer (staging format) ---
+    L.append("/// Dump entire GPU buffer in staging format: [offset_table][prim_data...]")
+    L.append("/// primCount = number of primitives, buf = start of buffer, bufWords = total words")
+    L.append("inline void dumpGpuBuffer(std::ostream& os, const float* buf, uint32_t primCount, uint32_t bufWords) {")
+    L.append("    os << \"=== GPU Buffer Dump: \" << primCount << \" primitives, \" << bufWords << \" words ===\\n\";")
+    L.append("    if (primCount == 0 || bufWords == 0) return;")
+    L.append("    os << \"Offset table (word offsets):\\n\";")
+    L.append("    const uint32_t* offsets = reinterpret_cast<const uint32_t*>(buf);")
+    L.append("    for (uint32_t i = 0; i < primCount && i < bufWords; i++) {")
+    L.append('        os << "  [" << i << "] -> " << offsets[i] << "\\n";')
+    L.append("    }")
+    L.append("    os << \"Primitive data:\\n\";")
+    L.append("    const float* dataBase = buf + primCount;")
+    L.append("    for (uint32_t i = 0; i < primCount; i++) {")
+    L.append("        uint32_t wordOff = offsets[i];")
+    L.append("        if (primCount + wordOff >= bufWords) {")
+    L.append('            os << "  [" << i << "] <out of bounds: off=" << wordOff << ">\\n";')
+    L.append("            continue;")
+    L.append("        }")
+    L.append("        dumpPrimitive(os, dataBase + wordOff, i);")
+    L.append("    }")
+    L.append("    os << \"=== End GPU Buffer Dump ===\\n\";")
     L.append("}\n")
 
     # --- translateGridEntries: does NOT use SDFPrimitive, always available ---

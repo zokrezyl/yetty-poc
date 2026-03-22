@@ -54,10 +54,10 @@ Result<void> flushMetadata() {
   meta.bgColor = _bgColor;
 
   ydebug("flushMetadata: primOff={} primCnt={} gridOff={} grid={}x{} "
-         "scene=[{},{}]-[{},{}]",
+         "glyphOff={} glyphCnt={} scene=[{},{}]-[{},{}]",
          meta.primitiveOffset, meta.primitiveCount, meta.gridOffset,
-         meta.gridWidth, meta.gridHeight, _sceneMinX, _sceneMinY, _sceneMaxX,
-         _sceneMaxY);
+         meta.gridWidth, meta.gridHeight, meta.glyphOffset, meta.glyphCount,
+         _sceneMinX, _sceneMinY, _sceneMaxX, _sceneMaxY);
 
   return _cardMgr->writeMetadata(MetadataHandle{_metaSlotIndex * 64, 64},
                                  &meta, sizeof(meta));
@@ -95,6 +95,50 @@ Result<void> writeDerived() {
   _gpuGridOffset = (_derivedHandle.offset + offset) / sizeof(float);
   ydebug("writeDerived: gridSize={} gridOffset={} primWordOffsets.size={}",
          gridStaging.size(), _gpuGridOffset, _primWordOffsets.size());
+  // Debug: dump grid structure and glyph connections
+  uint32_t numCells = _gridWidth * _gridHeight;
+  ydebug("=== GPU BUFFER DUMP ===");
+  ydebug("gridOffset={} glyphOffset={} numCells={}", _gpuGridOffset,
+         (_derivedHandle.offset + gridBytes) / sizeof(float), numCells);
+
+  // Find first few cells with glyph entries
+  uint32_t cellsWithGlyphs = 0;
+  for (uint32_t ci = 0; ci < numCells && cellsWithGlyphs < 5; ci++) {
+    uint32_t packedOff = gridStaging[ci];
+    if (packedOff >= gridStaging.size()) continue;
+    uint32_t cnt = gridStaging[packedOff];
+    bool hasGlyph = false;
+    for (uint32_t j = 0; j < cnt; j++) {
+      uint32_t idx = packedOff + 1 + j;
+      if (idx >= gridStaging.size()) break;
+      if ((gridStaging[idx] & 0x80000000u) != 0) { hasGlyph = true; break; }
+    }
+    if (hasGlyph) {
+      uint32_t cellX = ci % _gridWidth;
+      uint32_t cellY = ci / _gridWidth;
+      ydebug("  cell[{},{}] packedOff={} cnt={}:", cellX, cellY, packedOff, cnt);
+      for (uint32_t j = 0; j < cnt && j < 5; j++) {
+        uint32_t rawVal = gridStaging[packedOff + 1 + j];
+        if ((rawVal & 0x80000000u) != 0) {
+          uint32_t gi = rawVal & 0x7FFFFFFFu;
+          ydebug("    entry[{}]: GLYPH gi={}", j, gi);
+        } else {
+          ydebug("    entry[{}]: PRIM idx={}", j, rawVal);
+        }
+      }
+      cellsWithGlyphs++;
+    }
+  }
+
+  // Dump first 3 glyphs
+  ydebug("  GLYPH DATA (first 3):");
+  for (size_t i = 0; i < std::min(size_t(3), _glyphs.size()); i++) {
+    const auto &g = _glyphs[i];
+    uint16_t gIdx = g.glyphLayerFlags & 0xFFFF;
+    ydebug("    glyph[{}]: x={:.1f} y={:.1f} w={:.1f} h={:.1f} atlasIdx={} color=0x{:08x}",
+           i, g.x, g.y, g.width(), g.height(), gIdx, g.color);
+  }
+  ydebug("=== END GPU BUFFER DUMP ===");
   if (!gridStaging.empty()) {
     std::memcpy(base + offset, gridStaging.data(), gridBytes);
     // Translate prim indices in grid entries to word offsets
@@ -128,8 +172,17 @@ Result<void> writeDerived() {
   uint32_t glyphBytes =
       static_cast<uint32_t>(_glyphs.size() * sizeof(YPaintGlyph));
   _gpuGlyphOffset = (_derivedHandle.offset + offset) / sizeof(float);
+  ydebug("writeDerived: glyphOffset={} glyphCount={} glyphBytes={}",
+         _gpuGlyphOffset, _glyphs.size(), glyphBytes);
   if (!_glyphs.empty()) {
     std::memcpy(base + offset, _glyphs.data(), glyphBytes);
+    // Dump first 3 glyphs
+    for (size_t i = 0; i < std::min(size_t(3), _glyphs.size()); i++) {
+      const auto &g = _glyphs[i];
+      uint16_t gIdx = g.glyphLayerFlags & 0xFFFF;
+      ydebug("  glyph[{}]: x={:.1f} y={:.1f} w={:.1f} h={:.1f} idx={} color=0x{:08x}",
+             i, g.x, g.y, g.width(), g.height(), gIdx, g.color);
+    }
   }
   offset += glyphBytes;
 

@@ -52,15 +52,13 @@ addYpaintBuffer(std::shared_ptr<YPaintBuffer> buffer) override {
   });
 
   // 2b. Extend scene bounds for new glyphs (MUST happen before cell size
-  // computation!)
+  // computation!) - ALWAYS extend for glyphs, even with explicit bounds
   for (uint32_t gi = baseGlyphIdx; gi < _glyphs.size(); gi++) {
     const auto &g = _glyphs[gi];
-    if (!_hasExplicitBounds) {
-      _sceneMinX = std::min(_sceneMinX, g.x);
-      _sceneMinY = std::min(_sceneMinY, g.y);
-      _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
-      _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
-    }
+    _sceneMinX = std::min(_sceneMinX, g.x);
+    _sceneMinY = std::min(_sceneMinY, g.y);
+    _sceneMaxX = std::max(_sceneMaxX, g.x + g.width());
+    _sceneMaxY = std::max(_sceneMaxY, g.y + g.height());
   }
 
   // 3. Process images

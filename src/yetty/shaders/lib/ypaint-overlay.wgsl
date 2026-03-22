@@ -12,13 +12,10 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
     }
 
     let metaOffset = slotIndex * 16u;
-    let primitiveCount = cardMetadata[metaOffset + 1u];
-    if (primitiveCount == 0u) {
-        return vec4<f32>(0.0);  // No content
-    }
 
     // Read metadata
     let primitiveOffset = cardMetadata[metaOffset + 0u];
+    let primitiveCount = cardMetadata[metaOffset + 1u];
     let gridOffset = cardMetadata[metaOffset + 2u];
     let gridWidth = cardMetadata[metaOffset + 3u];
     let gridHeight = cardMetadata[metaOffset + 4u];
@@ -27,6 +24,11 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
     let cellSizeY = cellSizeXY.y;
     let glyphOffset = cardMetadata[metaOffset + 6u];
     let glyphCount = cardMetadata[metaOffset + 7u];
+
+    // Early exit if no content (no SDF primitives AND no glyphs)
+    if (primitiveCount == 0u && glyphCount == 0u) {
+        return vec4<f32>(0.0);
+    }
 
     // Content bounds
     let contentMinX = bitcast<f32>(cardMetadata[metaOffset + 8u]);
@@ -68,11 +70,45 @@ fn renderYpaintOverlay(slotIndex: u32, pixelPos: vec2<f32>) -> vec4<f32> {
     var resultColor = vec3<f32>(0.0);
     var resultAlpha = 0.0;
 
+    let glyphSize = 5u;  // YPaintGlyph: x, y, wh_packed, glf_packed, color
+    let screenScale = 1.0;
+
     for (var i = 0u; i < loopCount; i++) {
         let rawIdx = bitcast<u32>(cardStorage[gridOffset + packedStart + 1u + i]);
 
-        // Skip glyphs for now (bit 31 set = glyph)
         if ((rawIdx & 0x80000000u) != 0u) {
+            // ---- TEXT GLYPH (MSDF) ----
+            let gi = rawIdx & 0x7FFFFFFFu;
+            let gOffset = glyphOffset + gi * glyphSize;
+
+            let gx = cardStorage[gOffset + 0u];
+            let gy = cardStorage[gOffset + 1u];
+            let whPacked = bitcast<u32>(cardStorage[gOffset + 2u]);
+            let gw = unpack2x16float(whPacked).x;
+            let gh = unpack2x16float(whPacked).y;
+            let glfPacked = bitcast<u32>(cardStorage[gOffset + 3u]);
+            let gIdx = glfPacked & 0xFFFFu;
+            let gColorPacked = bitcast<u32>(cardStorage[gOffset + 4u]);
+
+            if (scenePos.x >= gx && scenePos.x < gx + gw &&
+                scenePos.y >= gy && scenePos.y < gy + gh) {
+                let glyphUV = vec2<f32>(
+                    (scenePos.x - gx) / gw,
+                    (scenePos.y - gy) / gh
+                );
+                let gColor = vec3<f32>(
+                    f32(gColorPacked & 0xFFu) / 255.0,
+                    f32((gColorPacked >> 8u) & 0xFFu) / 255.0,
+                    f32((gColorPacked >> 16u) & 0xFFu) / 255.0
+                );
+                let gAlpha = f32((gColorPacked >> 24u) & 0xFFu) / 255.0;
+
+                let glyphResult = renderMsdfGlyph(glyphUV, gIdx, gColor, resultColor, grid.pixelRange, screenScale);
+                if (glyphResult.alpha > 0.01) {
+                    resultColor = glyphResult.color;
+                    resultAlpha = max(resultAlpha, glyphResult.alpha * gAlpha);
+                }
+            }
             continue;
         }
 
