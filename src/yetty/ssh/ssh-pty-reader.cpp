@@ -13,11 +13,14 @@ SshPtyReader::~SshPtyReader() {
 }
 
 Result<void> SshPtyReader::init(const PtyConfig& config, const SshConfig& sshConfig) {
+    ydebug("SshPtyReader::init BEGIN {}@{}:{}", sshConfig.username, sshConfig.host, sshConfig.port);
     _sshConfig = sshConfig;
     _sshConfig.cols = static_cast<uint16_t>(config.cols);
     _sshConfig.rows = static_cast<uint16_t>(config.rows);
 
     _client = std::make_shared<SshClient>();
+    _running = true;
+    ydebug("SshPtyReader::init: created SshClient");
 
     // Set up callbacks
     _client->setDataCallback([this](const char* data, size_t len) {
@@ -28,62 +31,48 @@ Result<void> SshPtyReader::init(const PtyConfig& config, const SshConfig& sshCon
         onSshDisconnect();
     });
 
-    // Connect and handshake (no auth yet)
+    // Set up status callback to display connection progress in terminal
+    _client->setStatusCallback([this](const std::string& msg) {
+        sendToTerminal(msg);
+    });
+
+    // Show connection attempt message
+    std::string connectMsg = "\033[1;36mConnecting to ";
+    if (!_sshConfig.username.empty()) {
+        connectMsg += _sshConfig.username + "@";
+    }
+    connectMsg += _sshConfig.host + ":" + std::to_string(_sshConfig.port) + "...\033[0m\r\n";
+    sendToTerminal(connectMsg);
+
+    // Start async connection - returns immediately
+    ydebug("SshPtyReader::init: calling connectNoAuth");
     auto res = _client->connectNoAuth(_sshConfig);
+    ydebug("SshPtyReader::init: connectNoAuth returned");
     if (!res) {
-        return Err<void>("Failed to connect via SSH", res);
+        // Connection setup failed immediately (e.g., DNS resolution)
+        std::string errMsg = "\033[1;31mConnection failed: " + res.error().message() + "\033[0m\r\n";
+        sendToTerminal(errMsg);
+        _state = SshState::Disconnected;
+        ydebug("SshPtyReader::init: connection failed immediately: {}", res.error().message());
+        // Still return Ok - we displayed the error in the terminal
+        return Ok();
     }
 
-    _running = true;
+    // Connection is in progress (async)
+    // State machine will advance via poll events
+    _state = SshState::Authenticating;  // Or could be a "Connecting" state
 
-    // Check if password is needed
-    if (_client->needsPassword()) {
-        // If password is already in config, try it first
-        if (!_sshConfig.password.empty()) {
-            ydebug("SshPtyReader: trying password from config");
-            auto authRes = _client->authenticatePassword(_sshConfig.password);
-            if (authRes) {
-                // Password worked - open shell
-                auto shellRes = _client->openShell();
-                if (!shellRes) {
-                    return Err<void>("Failed to open shell", shellRes);
-                }
-                _state = SshState::Connected;
-                ydebug("SshPtyReader: authenticated with config password");
-            } else {
-                // Password failed - show error and prompt for password
-                sendToTerminal("\033[1;31mAuthentication failed\033[0m\r\n");
-                sendToTerminal("Password: ");
-                _state = SshState::WaitingForPassword;
-                ydebug("SshPtyReader: config password failed, waiting for user input");
-            }
-        } else {
-            // Show password prompt in terminal
-            _state = SshState::WaitingForPassword;
-            sendToTerminal("Password: ");
-            ydebug("SshPtyReader: waiting for password input");
-        }
-    } else {
-        // Already authenticated (e.g., public key worked)
-        auto shellRes = _client->openShell();
-        if (!shellRes) {
-            return Err<void>("Failed to open shell", shellRes);
-        }
-        _state = SshState::Connected;
-        ydebug("SshPtyReader: connected (no password needed)");
-    }
-
-    ydebug("SshPtyReader: init complete to {}@{}:{}", _sshConfig.username, _sshConfig.host, _sshConfig.port);
+    ydebug("SshPtyReader::init DONE - async connect started to {}@{}:{}",
+           _sshConfig.username, _sshConfig.host, _sshConfig.port);
     return Ok();
 }
 
 size_t SshPtyReader::read(char* buf, size_t maxLen) {
-    // Poll for new data first
+    // Poll for new data first (only needed if not using event loop)
     if (_client) {
         _client->poll();
     }
 
-    std::lock_guard<std::mutex> lock(_mutex);
     size_t toRead = std::min(maxLen, _recvBuffer.size());
     for (size_t i = 0; i < toRead; i++) {
         buf[i] = _recvBuffer.front();
@@ -107,7 +96,6 @@ void SshPtyReader::write(const char* data, size_t len) {
 }
 
 void SshPtyReader::sendToTerminal(const std::string& text) {
-    std::lock_guard<std::mutex> lock(_mutex);
     for (char c : text) {
         _recvBuffer.push_back(c);
     }
@@ -140,23 +128,14 @@ void SshPtyReader::attemptAuthentication() {
     _passwordBuffer.clear();  // Clear password from memory
 
     if (!res) {
-        // Auth failed
-        sendToTerminal("\033[1;31mAuthentication failed\033[0m\r\n");
-        sendToTerminal("Password: ");
+        // Auth failed - SshClient already sent status message via callback
         _state = SshState::WaitingForPassword;
         return;
     }
 
-    // Auth succeeded - open shell
-    auto shellRes = _client->openShell();
-    if (!shellRes) {
-        sendToTerminal("\033[1;31mFailed to open shell\033[0m\r\n");
-        _running = false;
-        return;
-    }
-
+    // Auth succeeded - state will advance via poll events
+    // (openShell is now handled by SshClient state machine)
     _state = SshState::Connected;
-    ydebug("SshPtyReader: authenticated and shell opened");
 }
 
 void SshPtyReader::resize(uint32_t cols, uint32_t rows) {
@@ -189,9 +168,8 @@ void SshPtyReader::stop() {
 void SshPtyReader::setDataAvailableCallback(DataAvailableCallback cb) {
     _dataAvailableCallback = std::move(cb);
 
-    // If there's already data in the buffer (e.g., "Password: " prompt from init),
+    // If there's already data in the buffer (e.g., "Connecting..." message from init),
     // notify immediately so the terminal reads it
-    std::lock_guard<std::mutex> lock(_mutex);
     if (!_recvBuffer.empty() && _dataAvailableCallback) {
         _dataAvailableCallback();
     }
@@ -203,11 +181,8 @@ void SshPtyReader::setExitCallback(ExitCallback cb) {
 
 void SshPtyReader::onSshData(const char* data, size_t len) {
     ytrace("SshPtyReader::onSshData received {} bytes", len);
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        for (size_t i = 0; i < len; i++) {
-            _recvBuffer.push_back(data[i]);
-        }
+    for (size_t i = 0; i < len; i++) {
+        _recvBuffer.push_back(data[i]);
     }
 
     if (_dataAvailableCallback) {

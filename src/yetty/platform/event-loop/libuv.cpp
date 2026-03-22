@@ -359,6 +359,8 @@ private:
 
     static void onPollCallback(uv_poll_t* handle, int status, int events) {
         auto* ph = static_cast<PollHandle*>(handle->data);
+        ydebug("EventLoop::onPollCallback: fd={} status={} events={} listeners={}",
+               ph->fd, status, events, ph->listeners.size());
 
         if (status < 0) {
             ywarn("EventLoop::onPollCallback: error status={} for fd={}", status, ph->fd);

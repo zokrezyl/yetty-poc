@@ -276,6 +276,8 @@ public:
         args::ValueFlag<std::string> configFlag(parser, "FILE", "Config file path", {'c', "config"});
         args::ValueFlag<std::string> executeFlag(parser, "COMMAND", "Execute command", {'e'});
         args::ValueFlag<std::string> telnetFlag(parser, "HOST:PORT", "Connect via telnet", {"telnet"});
+        args::ValueFlag<std::string> sshFlag(parser, "[USER@]HOST[:PORT]", "Connect via SSH", {"ssh"});
+        args::ValueFlag<std::string> sshIdentityFlag(parser, "FILE", "SSH identity file (private key)", {"ssh-identity-file"});
         args::ValueFlag<std::string> msdfProviderFlag(parser, "PROVIDER", "MSDF provider (cpu/gpu)", {"msdf-provider"});
         args::ValueFlag<std::string> vncClientFlag(parser, "HOST:PORT", "VNC client", {"vnc-client"});
         args::Flag vncServerFlag(parser, "vnc-server", "Start VNC server", {"vnc-server"});
@@ -308,6 +310,37 @@ public:
         if (telnetFlag) {
             std::string addr = args::get(telnetFlag);
             set(DataPath("shell/telnet"), Value(addr.empty() ? "127.0.0.1:8023" : addr));
+        }
+        if (sshFlag) {
+            // Parse [user@]hostname[:port]
+            std::string spec = args::get(sshFlag);
+            std::string user, host;
+            int port = 22;
+
+            // Check for user@
+            auto atPos = spec.find('@');
+            if (atPos != std::string::npos) {
+                user = spec.substr(0, atPos);
+                spec = spec.substr(atPos + 1);
+            }
+
+            // Check for :port (use rfind to handle IPv6)
+            auto colonPos = spec.rfind(':');
+            if (colonPos != std::string::npos) {
+                host = spec.substr(0, colonPos);
+                port = std::stoi(spec.substr(colonPos + 1));
+            } else {
+                host = spec;
+            }
+
+            set(DataPath("ssh/host"), Value(host));
+            set(DataPath("ssh/port"), Value(port));
+            if (!user.empty()) {
+                set(DataPath("ssh/user"), Value(user));
+            }
+        }
+        if (sshIdentityFlag) {
+            set(DataPath("ssh/identity-file"), Value(args::get(sshIdentityFlag)));
         }
         if (msdfProviderFlag) set(DataPath("rendering/msdf-provider"), Value(args::get(msdfProviderFlag)));
 

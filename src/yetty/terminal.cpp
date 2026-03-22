@@ -326,7 +326,18 @@ private:
             config.cols = cols;
             config.rows = rows;
 
-            ydebug("Creating PtyReader: shell={} {}x{}", shellPath, cols, rows);
+            // Check for SSH mode
+            if (_ctx.config) {
+                config.sshHost = _ctx.config->get<std::string>("ssh/host", "");
+                config.sshPort = static_cast<uint16_t>(_ctx.config->get<int>("ssh/port", 22));
+                config.sshUser = _ctx.config->get<std::string>("ssh/user", "");
+                config.sshIdentityFile = _ctx.config->get<std::string>("ssh/identity-file", "");
+                if (!config.sshHost.empty()) {
+                    ydebug("Terminal: SSH mode enabled - {}@{}:{}", config.sshUser, config.sshHost, config.sshPort);
+                }
+            }
+
+            ydebug("Creating PtyReader: shell={} sshHost={} {}x{}", shellPath, config.sshHost, cols, rows);
             auto ptyMgrResult = PtyManager::instance();
             if (!ptyMgrResult) {
                 yerror("PtyManager::instance FAILED");

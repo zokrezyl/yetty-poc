@@ -2,9 +2,7 @@
 
 #include <yetty/platform/pty-reader.h>
 #include "ssh-client.h"
-#include <atomic>
 #include <deque>
-#include <mutex>
 #include <string>
 
 namespace yetty::ssh {
@@ -40,11 +38,10 @@ private:
 
     std::shared_ptr<SshClient> _client;
     SshConfig _sshConfig;
-    std::mutex _mutex;
     std::deque<char> _recvBuffer;
     std::string _passwordBuffer;
     SshState _state = SshState::Disconnected;
-    std::atomic<bool> _running{false};
+    bool _running = false;
     DataAvailableCallback _dataAvailableCallback;
     ExitCallback _exitCallback;
 };

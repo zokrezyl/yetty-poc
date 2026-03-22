@@ -50,6 +50,9 @@ extern "C" {
 
 namespace yetty {
 
+// Forward declaration for signal handler
+static void signalHandler(int sig);
+
 class YettyImpl : public Yetty, public base::EventListener {
 public:
     YettyImpl() = default;
@@ -724,6 +727,15 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
             (*loopResult)->dispatch(base::Event::screenUpdateEvent());
         };
     }
+
+    // TEMPORARY: Start event loop here at end of init for SSH testing
+    // (SSH poll events need uv_run to be called)
+    ydebug("init: starting event loop (TEMPORARY - moved from run())");
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+    auto loop = *base::EventLoop::instance();
+    loop->start();
+    ydebug("init: event loop returned");
 
     return Ok();
 }
@@ -1824,15 +1836,8 @@ static void signalHandler(int sig) {
 }
 
 Result<void> YettyImpl::run() noexcept {
-    ydebug("Starting render loop...");
-
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
-
-    // Timer is already started in initEventLoop()
-    // Just start the event loop - blocks on desktop, no-op on Android
-    auto loop = *base::EventLoop::instance();
-    loop->start();
+    // TEMPORARY: Event loop now started at end of init() for SSH testing
+    ydebug("run() - no-op (event loop started in init)");
 
     ydebug("Run finished.");
 

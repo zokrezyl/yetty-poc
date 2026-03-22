@@ -54,13 +54,14 @@ public:
 
     void setDataCallback(DataCallback cb);
     void setDisconnectCallback(DisconnectCallback cb);
+    void setStatusCallback(std::function<void(const std::string&)> cb);
 
-    // Process pending I/O - call this regularly
+    // Process pending I/O - call this regularly (only needed if not using EventLoop)
     void poll();
 
 private:
     class Impl;
-    std::unique_ptr<Impl> _impl;
+    std::shared_ptr<Impl> _impl;  // shared_ptr because Impl is EventListener
 };
 
 } // namespace yetty::ssh
