@@ -29,12 +29,10 @@ if(YETTY_ENABLE_THORVG)
 endif()
 
 include(${YETTY_ROOT}/build-tools/cmake/TreeSitter.cmake)
-# yvideo dependencies (dav1d, openh264, minimp4) - not available on Emscripten
-if(NOT EMSCRIPTEN)
-    include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
-    include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
-    include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
-endif()
+# yvideo dependencies (dav1d, openh264, minimp4)
+include(${YETTY_ROOT}/build-tools/cmake/Dav1d.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/openh264.cmake)
+include(${YETTY_ROOT}/build-tools/cmake/minimp4.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/wasm3.cmake)
 include(${YETTY_ROOT}/build-tools/cmake/libs/libssh2.cmake)
 

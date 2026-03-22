@@ -109,10 +109,8 @@ add_subdirectory(ygrid)
 if(YETTY_ENABLE_THORVG)
     add_subdirectory(ythorvg)
 endif()
-# yvideo requires dav1d/openh264 not available on WebAssembly
-if(NOT EMSCRIPTEN)
-    add_subdirectory(yvideo)
-endif()
+# yvideo - H.264/AV1 codec support for VNC
+add_subdirectory(yvideo)
 add_subdirectory(cards)
 add_subdirectory(yast)
 add_subdirectory(yfsvm)

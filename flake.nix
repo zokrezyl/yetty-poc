@@ -50,6 +50,8 @@
           git
           llvmPackages_21.clang
           llvmPackages_21.lld
+          meson  # For dav1d (AV1 decoder)
+          nasm   # For dav1d assembly optimizations
         ];
 
         # Desktop build dependencies
@@ -146,7 +148,7 @@
 
           # Android build shell
           android = pkgs.mkShell {
-            buildInputs = commonDeps ++ androidDeps ++ [ pkgs.zlib pkgs.openssl pkgs.meson pkgs.brotli pkgs.nasm armEmulatorScript ];
+            buildInputs = commonDeps ++ androidDeps ++ [ pkgs.zlib pkgs.openssl pkgs.brotli armEmulatorScript ];
 
             ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
             ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
@@ -176,8 +178,6 @@
               pkgs.nodejs
               pkgs.gcc  # For building host tools (yecho-static for VM)
               pkgs.brotli  # For asset compression in incbin
-              pkgs.meson  # For dav1d build
-              pkgs.nasm   # For dav1d build
             ];
 
             # Emscripten environment

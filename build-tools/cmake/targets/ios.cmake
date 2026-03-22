@@ -12,13 +12,10 @@ file(MAKE_DIRECTORY ${IOS_ASSETS_DIR})
 # Add src/yetty (builds libraries, VNC included since YETTY_ANDROID=0)
 add_subdirectory(${YETTY_ROOT}/src/yetty ${CMAKE_BINARY_DIR}/src/yetty)
 
-# Filter out main.cpp from YETTY_CORE_SOURCES (iOS has its own entry point in ios.mm)
-set(YETTY_IOS_CORE_SOURCES ${YETTY_CORE_SOURCES})
-list(FILTER YETTY_IOS_CORE_SOURCES EXCLUDE REGEX "main\\.cpp$")
-
 # Create iOS app bundle (executable, not library)
+# main.cpp has Desktop/iOS entry point that creates InitManager and calls run()
 add_executable(yetty MACOSX_BUNDLE
-    ${YETTY_IOS_CORE_SOURCES}
+    ${YETTY_CORE_SOURCES}
     ${YETTY_IOS_SOURCES}
     # Platform abstraction sources for iOS
     ${YETTY_ROOT}/src/yetty/platform/init-manager/ios.mm

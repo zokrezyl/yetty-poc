@@ -5,9 +5,23 @@
 #include <libssh2.h>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
+// Windows socket compatibility
+using socklen_t = int;
+#define SOCKET_ERRNO WSAGetLastError()
+#define SOCKET_EINPROGRESS WSAEWOULDBLOCK
+inline std::string socket_strerror(int err) {
+    char buf[256];
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   nullptr, err, 0, buf, sizeof(buf), nullptr);
+    return buf;
+}
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -17,6 +31,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cerrno>
+#define SOCKET_ERRNO errno
+#define SOCKET_EINPROGRESS EINPROGRESS
+inline std::string socket_strerror(int err) { return strerror(err); }
 #endif
 
 #include <cstring>
@@ -78,22 +95,28 @@ public:
 
         // Set non-blocking
         ydebug("SSH startConnect: set non-blocking");
+#ifdef _WIN32
+        u_long mode = 1;
+        ioctlsocket(_socket, FIONBIO, &mode);
+#else
         int flags = fcntl(_socket, F_GETFL, 0);
         fcntl(_socket, F_SETFL, flags | O_NONBLOCK);
+#endif
 
         // Disable Nagle
         int flag = 1;
-        setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+        setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));
 
         // Start async connect
         ydebug("SSH startConnect: calling connect()");
         int connectResult = ::connect(_socket, result->ai_addr, result->ai_addrlen);
-        ydebug("SSH startConnect: connect() returned {}, errno={}", connectResult, errno);
+        int connectErr = SOCKET_ERRNO;
+        ydebug("SSH startConnect: connect() returned {}, err={}", connectResult, connectErr);
         freeaddrinfo(result);
 
-        if (connectResult < 0 && errno != EINPROGRESS) {
+        if (connectResult < 0 && connectErr != SOCKET_EINPROGRESS) {
             closeSocket();
-            return Err<void>("Failed to connect: " + std::string(strerror(errno)));
+            return Err<void>("Failed to connect: " + socket_strerror(connectErr));
         }
 
         _state = ConnectState::Connecting;
@@ -196,8 +219,9 @@ public:
         // Check if connect completed
         int error = 0;
         socklen_t len = sizeof(error);
-        if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
-            reportStatus("\033[1;31mConnection failed: " + std::string(strerror(error ? error : errno)) + "\033[0m\r\n");
+        if (getsockopt(_socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &len) < 0 || error != 0) {
+            int lastErr = error ? error : SOCKET_ERRNO;
+            reportStatus("\033[1;31mConnection failed: " + socket_strerror(lastErr) + "\033[0m\r\n");
             transitionTo(ConnectState::Failed);
             return;
         }

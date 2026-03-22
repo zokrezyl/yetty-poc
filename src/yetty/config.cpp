@@ -8,7 +8,9 @@
 #include <iostream>
 #include <cstdlib>
 
-#ifdef __linux__
+#ifdef __EMSCRIPTEN__
+// No getpid() on Emscripten - RPC not supported anyway
+#elif defined(__linux__)
 #include <unistd.h>
 #include <linux/limits.h>
 #elif defined(__APPLE__)
@@ -347,7 +349,9 @@ public:
             // CLI override: exact socket path
             set(DataPath("rpc/enabled"), Value(true));
             set(DataPath("rpc/socket-path"), Value(args::get(rpcSocketFlag)));
-        } else if (Config::get<bool>("rpc/enabled", true)) {
+        }
+#ifndef __EMSCRIPTEN__
+        else if (Config::get<bool>("rpc/enabled", true)) {
             // Generate socket path from socket-dir or paths/runtime
             std::string dir = Config::get<std::string>("rpc/socket-dir", "");
             if (dir.empty()) {
@@ -355,6 +359,7 @@ public:
             }
             set(DataPath("rpc/socket-path"), Value(dir + "/yetty-" + std::to_string(getpid()) + ".sock"));
         }
+#endif
         if (msdfProviderFlag) set(DataPath("rendering/msdf-provider"), Value(args::get(msdfProviderFlag)));
 
         if (vncClientFlag) {
@@ -661,7 +666,7 @@ private:
 #if defined(__EMSCRIPTEN__)
         // Web: assets preloaded to /assets
         paths.values["shaders"] = Value(std::string("/assets/shaders"));
-        paths.values["fonts"] = Value(std::string("/assets/fonts"));
+        paths.values["fonts"] = Value(std::string("/assets"));
         paths.values["msdf-fonts"] = Value(std::string("/assets/msdf-fonts"));
         paths.values["runtime"] = Value(std::string("/tmp"));
         paths.values["bin"] = Value(std::string("/bin"));
