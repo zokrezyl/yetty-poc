@@ -221,11 +221,11 @@ public:
     if (!_dirty && !_gridStaging.empty())
       return;
 
-    // Build line base prim index mapping
-    std::vector<uint32_t> lineBasePrimIdx;
+    // Build line base prim index mapping (reuse member buffer)
+    _lineBasePrimIdx.clear();
     uint32_t totalPrims = 0;
     for (const auto &line : _lines) {
-      lineBasePrimIdx.push_back(totalPrims);
+      _lineBasePrimIdx.push_back(totalPrims);
       totalPrims += static_cast<uint32_t>(line.prims.size());
     }
 
@@ -275,8 +275,11 @@ public:
     _gridHeight = gridH;
     uint32_t numCells = gridW * gridH;
 
-    // Build glyph->cell mapping
-    std::vector<std::vector<uint32_t>> cellGlyphs(numCells);
+    // Build glyph->cell mapping (reuse member buffer)
+    _cellGlyphs.resize(numCells);
+    for (auto &cg : _cellGlyphs) {
+      cg.clear();
+    }
     if (glyphCount > 0 && _cellSizeX > 0 && _cellSizeY > 0) {
       for (uint32_t gi = 0; gi < glyphCount; gi++) {
         float gMinX, gMinY, gMaxX, gMaxY;
@@ -300,65 +303,47 @@ public:
           for (int32_t cx = cMinX; cx <= cMaxX; cx++) {
             uint32_t cellIdx =
                 static_cast<uint32_t>(cy) * gridW + static_cast<uint32_t>(cx);
-            cellGlyphs[cellIdx].push_back(gi);
+            _cellGlyphs[cellIdx].push_back(gi);
           }
         }
       }
     }
 
-    // Pass 1: compute total entries
-    uint32_t totalEntries = 0;
+    // Single pass: offset table then appended entries
+    _gridStaging.clear();
+    _gridStaging.resize(numCells);
+
     for (uint32_t y = 0; y < gridH; y++) {
+      bool hasLine = y < _lines.size();
+      uint32_t lineCellCount = hasLine ? static_cast<uint32_t>(_lines[y].cells.size()) : 0;
+
       for (uint32_t x = 0; x < gridW; x++) {
         uint32_t cellIdx = y * gridW + x;
-        uint32_t primCount = 0;
-        if (y < _lines.size() && x < _lines[y].cells.size()) {
-          primCount = static_cast<uint32_t>(_lines[y].cells[x].refs.size());
-        }
-        uint32_t gc = static_cast<uint32_t>(cellGlyphs[cellIdx].size());
-        totalEntries += 1 + primCount + gc;
-      }
-    }
+        _gridStaging[cellIdx] = static_cast<uint32_t>(_gridStaging.size());
 
-    _gridStaging.resize(numCells + totalEntries);
-
-    // Pass 2: fill offsets and entries
-    uint32_t pos = numCells;
-    for (uint32_t y = 0; y < gridH; y++) {
-      for (uint32_t x = 0; x < gridW; x++) {
-        uint32_t cellIdx = y * gridW + x;
-        _gridStaging[cellIdx] = pos;
-
-        uint32_t primCount = 0;
-        if (y < _lines.size() && x < _lines[y].cells.size()) {
-          primCount = static_cast<uint32_t>(_lines[y].cells[x].refs.size());
-        }
-        uint32_t gc = static_cast<uint32_t>(cellGlyphs[cellIdx].size());
-        uint32_t totalCount = primCount + gc;
-
-        _gridStaging[pos] = totalCount;
-        uint32_t entryIdx = 0;
+        uint32_t countPos = static_cast<uint32_t>(_gridStaging.size());
+        _gridStaging.push_back(0);
+        uint32_t count = 0;
 
         // Add prim entries
-        if (y < _lines.size() && x < _lines[y].cells.size()) {
+        if (hasLine && x < lineCellCount) {
           const auto &cell = _lines[y].cells[x];
           for (const auto &ref : cell.refs) {
             uint32_t bl = y + ref.linesAhead;
-            if (bl < lineBasePrimIdx.size()) {
-              uint32_t globalPrimIdx = lineBasePrimIdx[bl] + ref.primIndex;
-              _gridStaging[pos + 1 + entryIdx] = globalPrimIdx;
-              entryIdx++;
+            if (bl < _lineBasePrimIdx.size()) {
+              _gridStaging.push_back(_lineBasePrimIdx[bl] + ref.primIndex);
+              count++;
             }
           }
         }
 
         // Add glyph entries with GLYPH_BIT
-        for (uint32_t gi : cellGlyphs[cellIdx]) {
-          _gridStaging[pos + 1 + entryIdx] = gi | GLYPH_BIT;
-          entryIdx++;
+        for (uint32_t gi : _cellGlyphs[cellIdx]) {
+          _gridStaging.push_back(gi | GLYPH_BIT);
+          count++;
         }
 
-        pos += 1 + totalCount;
+        _gridStaging[countPos] = count;
       }
     }
 
@@ -571,6 +556,10 @@ private:
   // Packed grid for GPU
   std::vector<uint32_t> _gridStaging;
   bool _dirty = true;
+
+  // Reusable scratch buffers (avoid per-rebuild allocation)
+  std::vector<uint32_t> _lineBasePrimIdx;
+  std::vector<std::vector<uint32_t>> _cellGlyphs;
 };
 
 //=============================================================================
