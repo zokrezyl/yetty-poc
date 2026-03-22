@@ -3158,6 +3158,16 @@ int GPUScreenImpl::onErase(VTermRect rect, int, void *user) {
     self->viewBufferDirty_ = true;
   }
 
+  // Detect full-screen clear (e.g., from `clear` command or Ctrl+L)
+  bool isFullScreenClear = (startRow == 0 && endRow == self->_rows &&
+                            startCol == 0 && endCol == self->_cols);
+
+  // Clear scrolling painter on full-screen clear
+  if (isFullScreenClear && self->_scrollingPainter) {
+    self->_scrollingPainter->clear();
+    ydebug("onErase: cleared scrolling painter (full-screen clear)");
+  }
+
   // On significant erase (e.g., clear screen), immediately GC orphaned cards
   // to free up card manager resources. Cards may still be in scrollback.
   int erasedRows = endRow - startRow;
@@ -4005,8 +4015,12 @@ void GPUScreenImpl::handleYpaintOSC(const std::string &payload, bool scrolling) 
     args = payload;
   }
 
-  // Handle clear command
+  // Handle clear command (only for overlay layer - scrolling clears via ANSI clear screen)
   if (args.find("--clear") != std::string::npos) {
+    if (scrolling) {
+      ywarn("handleYpaintOSC: --clear ignored for scrolling layer (use clear screen instead)");
+      return;
+    }
     painter->clear();
     _hasDamage = true;
     return;
