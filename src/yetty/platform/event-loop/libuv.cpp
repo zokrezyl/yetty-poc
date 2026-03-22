@@ -3,6 +3,7 @@
 #include <uv.h>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <atomic>
 
@@ -37,10 +38,28 @@ public:
         // Initialize screen update async handle
         _screenUpdateAsync.data = this;
         uv_async_init(_loop, &_screenUpdateAsync, onScreenUpdateAsync);
+
+        // Initialize signal handlers for graceful shutdown
+        _sigintHandle.data = this;
+        _sigtermHandle.data = this;
+        uv_signal_init(_loop, &_sigintHandle);
+        uv_signal_init(_loop, &_sigtermHandle);
+        uv_signal_start(&_sigintHandle, onSignal, SIGINT);
+        uv_signal_start(&_sigtermHandle, onSignal, SIGTERM);
     }
 
     ~EventLoopImpl() override {
+        uv_signal_stop(&_sigintHandle);
+        uv_signal_stop(&_sigtermHandle);
+        uv_close(reinterpret_cast<uv_handle_t*>(&_sigintHandle), nullptr);
+        uv_close(reinterpret_cast<uv_handle_t*>(&_sigtermHandle), nullptr);
         uv_close(reinterpret_cast<uv_handle_t*>(&_screenUpdateAsync), nullptr);
+    }
+
+    static void onSignal(uv_signal_t* handle, int signum) {
+        ydebug("EventLoop: received signal {} - stopping", signum);
+        auto* self = static_cast<EventLoopImpl*>(handle->data);
+        uv_stop(self->_loop);
     }
 
     int start() override {
@@ -220,9 +239,26 @@ public:
         }
 
         uv_poll_stop(&it->second->poll);
-        uv_close(reinterpret_cast<uv_handle_t*>(&it->second->poll), nullptr);
+
+        // Move to pending close set - libuv needs handle alive until close callback
+        auto handle = std::move(it->second);
         _polls.erase(it);
+
+        auto* rawPtr = handle.release();
+        _pendingPollClose.insert(rawPtr);
+
+        uv_close(reinterpret_cast<uv_handle_t*>(&rawPtr->poll), onPollCloseCallback);
         return Ok();
+    }
+
+    static void onPollCloseCallback(uv_handle_t* handle) {
+        auto* ph = reinterpret_cast<PollHandle*>(handle);
+        // Get EventLoopImpl from singleton to remove from pending set
+        if (auto loopResult = EventLoop::instance(); loopResult) {
+            auto* impl = static_cast<EventLoopImpl*>(loopResult->get());
+            impl->_pendingPollClose.erase(ph);
+        }
+        delete ph;
     }
 
     Result<void> registerPollListener(PollId id, EventListener::Ptr listener) override {
@@ -377,12 +413,17 @@ private:
     uv_loop_t* _loop = nullptr;
     std::unordered_map<PollId, std::unique_ptr<PollHandle>> _polls;
     std::unordered_map<TimerId, std::unique_ptr<TimerHandle>> _timers;
+    std::unordered_set<PollHandle*> _pendingPollClose;  // Handles awaiting async close
     PollId _nextPollId = 1;
     TimerId _nextTimerId = 1;
 
     // Screen update async - for immediate re-render without waiting for timer
     uv_async_t _screenUpdateAsync;
     std::atomic<bool> _screenUpdatePending{false};
+
+    // Signal handlers for graceful shutdown
+    uv_signal_t _sigintHandle;
+    uv_signal_t _sigtermHandle;
 };
 
 // Factory implementation

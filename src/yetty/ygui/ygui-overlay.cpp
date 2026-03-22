@@ -2,6 +2,7 @@
 #include <yetty/yetty-context.h>
 #include <yetty/wgpu-compat.h>
 #include <yetty/platform/event-loop.h>
+#include <yetty/platform/surface-manager.h>
 #include <yetty/ydraw-builder.h>
 #include <yetty/ms-msdf-font.h>
 #include <yetty/msdf-atlas.h>
@@ -206,7 +207,7 @@ Result<void> YGuiOverlayImpl::init() noexcept {
 }
 
 Result<void> YGuiOverlayImpl::buildShaderSource(std::string& source) {
-    std::string shaderDir = _ctx.fsPathManager->getShadersDir();
+    std::string shaderDir = _ctx.config->get<std::string>("paths/shaders", "");
 
     // Read overlay shader
     std::string overlayPath = shaderDir + "/ygui-overlay.wgsl";
@@ -924,7 +925,9 @@ Result<void> YGuiOverlayImpl::render(WGPURenderPassEncoder pass) {
                     newText, t.fontSize, t.padMedium);
             }
             _engine->markDirty();
-            if (_ctx.surfaceManager) _ctx.surfaceManager->requestRender();
+            if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+                (*surfaceResult)->requestRender();
+            }
         }
     }
 
@@ -971,7 +974,9 @@ Result<bool> YGuiOverlayImpl::onEvent(const base::Event& event) {
     if (!_engine) return Ok(false);
 
     auto consume = [&]() -> Result<bool> {
-        if (_ctx.surfaceManager) _ctx.surfaceManager->requestRender();
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->requestRender();
+        }
         return Ok(true);
     };
 

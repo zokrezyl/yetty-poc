@@ -347,7 +347,7 @@ private:
     //=========================================================================
 
     Result<void> createScalePipeline() {
-        std::string shaderPath = _ctx.fsPathManager->getShadersDir() + "/scale-image.wgsl";
+        std::string shaderPath = _ctx.config->get<std::string>("paths/shaders", "") + "/scale-image.wgsl";
         ydebug("Image: Loading scale shader from: {}", shaderPath.c_str());
 
         std::ifstream file(shaderPath.c_str());

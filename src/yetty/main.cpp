@@ -20,9 +20,6 @@
 #endif
 
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
-static void sigint_handler(int sig) {
-    ydebug("SIGINT received! (signal {})", sig);
-}
 
 static void setup_logging(int argc, char* argv[]) {
     // Pre-parse --ytrace-default-on (must be set before any ytrace usage)
@@ -126,7 +123,7 @@ int main(int argc, char* argv[]) {
     setup_logging(argc, argv);
 
     ydebug("=== YETTY BUILD ===");
-    signal(SIGINT, sigint_handler);
+    // Signal handling (SIGINT/SIGTERM) is done in EventLoop via libuv
 
     auto initResult = yetty::InitManager::create();
     if (!initResult) {

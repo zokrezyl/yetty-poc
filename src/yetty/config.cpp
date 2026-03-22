@@ -604,6 +604,85 @@ private:
         auto& shellEnv = _root.children["shell"].children["env"];
         shellEnv.values["TERM"] = Value(std::string("xterm-256color"));
         shellEnv.values["COLORTERM"] = Value(std::string("truecolor"));
+
+        // paths - platform-specific defaults
+        loadPathDefaults();
+    }
+
+    void loadPathDefaults() {
+        auto& paths = _root.children["paths"];
+
+#if defined(__EMSCRIPTEN__)
+        // Web: assets preloaded to /assets
+        paths.values["shaders"] = Value(std::string("/assets/shaders"));
+        paths.values["fonts"] = Value(std::string("/assets/fonts"));
+        paths.values["msdf-fonts"] = Value(std::string("/assets/msdf-fonts"));
+        paths.values["runtime"] = Value(std::string("/tmp"));
+        paths.values["bin"] = Value(std::string("/bin"));
+#elif defined(__ANDROID__)
+        // Android: internal storage paths
+        paths.values["shaders"] = Value(std::string("/data/local/tmp/yetty/shaders"));
+        paths.values["fonts"] = Value(std::string("/data/local/tmp/yetty/fonts"));
+        paths.values["msdf-fonts"] = Value(std::string("/data/local/tmp/yetty/msdf-fonts"));
+        paths.values["runtime"] = Value(std::string("/data/local/tmp/yetty"));
+        paths.values["bin"] = Value(std::string("/data/data/com.termux/files/usr/bin"));
+#elif defined(_WIN32)
+        // Windows: use LOCALAPPDATA
+        std::string base;
+        if (const char* appdata = std::getenv("LOCALAPPDATA")) {
+            base = std::string(appdata) + "\\yetty";
+        } else {
+            base = "C:\\yetty";
+        }
+        paths.values["shaders"] = Value(base + "\\shaders");
+        paths.values["fonts"] = Value(base + "\\fonts");
+        paths.values["msdf-fonts"] = Value(base + "\\msdf-fonts");
+        paths.values["runtime"] = Value(base);
+        paths.values["bin"] = Value(std::string("C:\\Windows\\System32"));
+#elif defined(__APPLE__)
+        // macOS: ~/Library/Caches/yetty
+        std::string cacheBase;
+        if (const char* home = std::getenv("HOME")) {
+            cacheBase = std::string(home) + "/Library/Caches/yetty";
+        } else {
+            cacheBase = "/tmp/yetty-cache";
+        }
+        std::string runtimeBase;
+        if (const char* tmpdir = std::getenv("TMPDIR")) {
+            runtimeBase = tmpdir;
+            if (!runtimeBase.empty() && runtimeBase.back() == '/') {
+                runtimeBase.pop_back();
+            }
+        } else {
+            runtimeBase = "/tmp/yetty-" + std::to_string(getuid());
+        }
+        paths.values["shaders"] = Value(cacheBase + "/shaders");
+        paths.values["fonts"] = Value(cacheBase + "/fonts");
+        paths.values["msdf-fonts"] = Value(cacheBase + "/msdf-fonts");
+        paths.values["runtime"] = Value(runtimeBase + "/yetty");
+        paths.values["bin"] = Value(std::string("/usr/bin"));
+#else
+        // Linux: XDG paths
+        std::string cacheBase;
+        if (const char* xdgCache = std::getenv("XDG_CACHE_HOME")) {
+            cacheBase = std::string(xdgCache) + "/yetty";
+        } else if (const char* home = std::getenv("HOME")) {
+            cacheBase = std::string(home) + "/.cache/yetty";
+        } else {
+            cacheBase = "/tmp/yetty-cache";
+        }
+        std::string runtimeBase;
+        if (const char* xdgRuntime = std::getenv("XDG_RUNTIME_DIR")) {
+            runtimeBase = xdgRuntime;
+        } else {
+            runtimeBase = "/tmp/yetty-" + std::to_string(getuid());
+        }
+        paths.values["shaders"] = Value(cacheBase + "/shaders");
+        paths.values["fonts"] = Value(cacheBase + "/fonts");
+        paths.values["msdf-fonts"] = Value(cacheBase + "/msdf-fonts");
+        paths.values["runtime"] = Value(runtimeBase + "/yetty");
+        paths.values["bin"] = Value(std::string("/usr/bin"));
+#endif
     }
 
     // Build {metadata: {...}, children: {...}} YAML for asTree

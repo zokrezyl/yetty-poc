@@ -12,7 +12,6 @@
 #include "ygui/ygui-overlay.h"
 #include <yetty/wgpu-compat.h>
 #include <yetty/platform/surface-manager.h>
-#include <yetty/platform/fs-path-manager.h>
 #include <yetty/platform/clipboard-manager.h>
 #include <yetty/platform/pty-manager.h>
 #include <yetty/base/base.h>
@@ -85,10 +84,6 @@ private:
 
     Result<Workspace::Ptr> createWorkspace() noexcept;
 
-    // Platform managers
-    SurfaceManager::Ptr _surfaceManager;
-    FsPathManager::Ptr _fsPathManager;
-    ClipboardManager::Ptr _clipboardManager;
     uint32_t _initialWidth = 1024;
     uint32_t _initialHeight = 768;
 
@@ -295,9 +290,14 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     ydebug("init: initSharedResources");
     if (auto res = initSharedResources(); !res) { ydebug("init: initSharedResources FAILED"); return res; }
 
-    // Create ShaderManager with GPUContext, allocator, and shaders directory from Platform
+    // Get paths from config (paths are platform-specific defaults, can be overridden)
+    auto shadersDir = _yettyContext.config->get<std::string>("paths/shaders", "");
+    auto fontsDir = _yettyContext.config->get<std::string>("paths/fonts", "");
+    auto msdfFontsDir = _yettyContext.config->get<std::string>("paths/msdf-fonts", "");
+
+    // Create ShaderManager with GPUContext, allocator, and shaders directory from config
     ydebug("init: ShaderManager::create");
-    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, _fsPathManager->getShadersDir());
+    auto shaderMgrResult = ShaderManager::create(_gpuContext, _gpuAllocator, shadersDir);
     if (!shaderMgrResult) {
         ydebug("init: ShaderManager::create FAILED");
         return Err<void>("Failed to create ShaderManager", shaderMgrResult);
@@ -313,16 +313,13 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
         cdbProvider = std::make_shared<CpuMsdfCdbProvider>();
         ydebug("init: Using CPU MSDF CDB provider");
     } else {
-        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, _fsPathManager->getShadersDir());
+        cdbProvider = std::make_shared<GpuMsdfCdbProvider>(_instance, shadersDir);
         ydebug("init: Using GPU MSDF CDB provider");
     }
 #endif
 
-    // Create FontManager with GPUContext, ShaderManager, and directories from Platform
+    // Create FontManager with GPUContext, ShaderManager, and directories from config
     ydebug("init: FontManager::create");
-    auto msdfFontsDir = _fsPathManager->getMsdfFontsDir();
-    auto fontsDir = _fsPathManager->getFontsDir();
-    auto shadersDir = _fsPathManager->getShadersDir();
 
     // Extract shader preload lists from config
     std::vector<std::string> preloadCardShaders;
@@ -345,9 +342,8 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     // Build YettyContext
     _yettyContext.gpu = _gpuContext;
     _yettyContext.gpuAllocator = _gpuAllocator;
-    _yettyContext.surfaceManager = _surfaceManager;
-    _yettyContext.fsPathManager = _fsPathManager;
-    // PtyManager will be obtained via ::instance() when needed
+    // SurfaceManager and ClipboardManager are singletons - access via ::instance() when needed
+    // Paths are in config under "paths/*" - can be overridden via config file or env vars
 #if !YETTY_WEB && !YETTY_IOS && !defined(__ANDROID__)
     _yettyContext.gpuMonitor = gpu::GpuMonitor::create();
 #endif
@@ -391,7 +387,8 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     // Create RPC server and write socket path to config BEFORE workspace/terminal
     // (Terminal reads shell/env from config when forking the shell)
     if (_yettyContext.config->get<bool>("rpc/enabled", true)) {
-        auto socketResult = rpc::createSocketPath(_fsPathManager->getRuntimeDir());
+        auto runtimeDir = _yettyContext.config->get<std::string>("paths/runtime", "/tmp");
+        auto socketResult = rpc::createSocketPath(runtimeDir);
         if (!socketResult) {
             return Err<void>("Failed to create RPC socket path", socketResult);
         }
@@ -437,7 +434,11 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
 #endif
 
     s_instance = this;
-    _lastFpsTime = _surfaceManager->getTime();
+    if (!_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            _lastFpsTime = (*surfaceResult)->getTime();
+        }
+    }
 
     // Initialize capture benchmark mode if enabled
     if (_captureBenchmark) {
@@ -451,8 +452,10 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     // Initialize VNC client mode if enabled
     if (_vncClientMode) {
         // Get initial VNC content area size (window minus our statusbar)
-        int windowW, windowH;
-        _surfaceManager->getWindowSize(windowW, windowH);
+        int windowW = 800, windowH = 600;
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->getWindowSize(windowW, windowH);
+        }
         float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
         int vncH = windowH - static_cast<int>(statusbarH);
         uint16_t vncWidth = static_cast<uint16_t>(windowW > 0 ? windowW : 800);
@@ -478,8 +481,8 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
         _vncClient->onFrameReceived = [this]() {
 #if YETTY_WEB
             // Web builds: request animation frame directly
-            if (_surfaceManager) {
-                _surfaceManager->requestRender();
+            if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+                (*surfaceResult)->requestRender();
             }
 #else
             auto t = std::chrono::high_resolution_clock::now();
@@ -659,9 +662,11 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
                            _vncRequestedWidth, _vncRequestedHeight);
                     return;
                 }
-                // Use current window dimensions
-                int w, h;
-                _surfaceManager->getFramebufferSize(w, h);
+                // Use current window dimensions (or defaults in headless mode)
+                int w = 800, h = 600;
+                if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+                    (*surfaceResult)->getFramebufferSize(w, h);
+                }
                 widthPx = static_cast<uint16_t>(w);
                 heightPx = static_cast<uint16_t>(h);
                 ydebug("VNC onResize: client requested current size -> {}x{}", widthPx, heightPx);
@@ -746,9 +751,9 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
         return Ok();
     }
 
-    // Derive cache base directory from Platform::getShadersDir()
-    // Platform returns full paths like "~/.cache/yetty/shaders" - we need the parent
-    std::filesystem::path shadersPath = _fsPathManager->getShadersDir();
+    // Derive cache base directory from config paths/shaders
+    // Config returns full paths like "~/.cache/yetty/shaders" - we need the parent
+    std::filesystem::path shadersPath = _yettyContext.config->get<std::string>("paths/shaders", "");
     std::filesystem::path cacheDir = shadersPath.parent_path();
     ydebug("initEmbeddedAssets: cacheDir={}", cacheDir.string());
 
@@ -815,43 +820,31 @@ Result<void> YettyImpl::initEmbeddedAssets() noexcept {
 }
 
 Result<void> YettyImpl::initWindow() noexcept {
-    // Initialize platform managers
-    auto surfaceResult = SurfaceManager::instance();
-    if (!surfaceResult) {
-        return Err<void>("Failed to get SurfaceManager", surfaceResult);
-    }
-    _surfaceManager = *surfaceResult;
-
-    auto fsPathResult = FsPathManager::instance();
-    if (!fsPathResult) {
-        return Err<void>("Failed to get FsPathManager", fsPathResult);
-    }
-    _fsPathManager = *fsPathResult;
-
-    auto clipboardResult = ClipboardManager::instance();
-    if (!clipboardResult) {
-        return Err<void>("Failed to get ClipboardManager", clipboardResult);
-    }
-    _clipboardManager = *clipboardResult;
-
-    // In headless mode, skip window setup
+    // In headless mode, nothing to initialize here
     if (_vncHeadless) {
-        ydebug("VNC headless mode: managers initialized, skipping window setup");
+        ydebug("VNC headless mode: no window initialization");
         return Ok();
     }
 
-    // Set window icon from embedded resource
-    _surfaceManager->setIcon(gLogoData, gLogoSize);
+    // Get window size from SurfaceManager (singleton, already created by InitManager)
+    auto surfaceResult = SurfaceManager::instance();
+    if (!surfaceResult) {
+        return Err<void>("SurfaceManager not available", surfaceResult);
+    }
+    auto surface = *surfaceResult;
+
+    // Set window icon
+    surface->setIcon(gLogoData, gLogoSize);
 
     // Get actual window size
     int actualW, actualH;
-    _surfaceManager->getWindowSize(actualW, actualH);
+    surface->getWindowSize(actualW, actualH);
     if (actualW > 0 && actualH > 0) {
         _initialWidth = static_cast<uint32_t>(actualW);
         _initialHeight = static_cast<uint32_t>(actualH);
     }
 
-    ydebug("Platform managers initialized, window size {}x{}", actualW, actualH);
+    ydebug("Window initialized, size {}x{}", actualW, actualH);
     return Ok();
 }
 
@@ -868,21 +861,25 @@ Result<void> YettyImpl::initWebGPU() noexcept {
 
     // Create surface (skip in headless mode)
     if (!_vncHeadless) {
-        _surface = _surfaceManager->createWGPUSurface(_instance);
-        if (_surface) {
-            ydebug("initWebGPU: Surface created");
-        } else {
-            ywarn("initWebGPU: Surface creation failed - will try without surface");
-        }
+        auto surfaceResult = SurfaceManager::instance();
+        if (surfaceResult) {
+            auto surface = *surfaceResult;
+            _surface = surface->createWGPUSurface(_instance);
+            if (_surface) {
+                ydebug("initWebGPU: Surface created");
+            } else {
+                ywarn("initWebGPU: Surface creation failed - will try without surface");
+            }
 
-        // Initialize content scale
-        int fbWidth, fbHeight, winWidth, winHeight;
-        _surfaceManager->getFramebufferSize(fbWidth, fbHeight);
-        _surfaceManager->getWindowSize(winWidth, winHeight);
-        if (winWidth > 0 && winHeight > 0) {
-            _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
-            _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
-            ydebug("Content scale: {}x{}", _contentScaleX, _contentScaleY);
+            // Initialize content scale
+            int fbWidth, fbHeight, winWidth, winHeight;
+            surface->getFramebufferSize(fbWidth, fbHeight);
+            surface->getWindowSize(winWidth, winHeight);
+            if (winWidth > 0 && winHeight > 0) {
+                _contentScaleX = static_cast<float>(fbWidth) / static_cast<float>(winWidth);
+                _contentScaleY = static_cast<float>(fbHeight) / static_cast<float>(winHeight);
+                ydebug("Content scale: {}x{}", _contentScaleX, _contentScaleY);
+            }
         }
     } else {
         ydebug("initWebGPU: Headless mode - skipping surface creation");
@@ -1650,11 +1647,6 @@ Result<void> YettyImpl::onShutdown() {
     if (_adapter) wgpuAdapterRelease(_adapter);
     if (_instance) wgpuInstanceRelease(_instance);
 
-    // Release platform managers
-    _surfaceManager.reset();
-    _clipboardManager.reset();
-    _fsPathManager.reset();
-
     s_instance = nullptr;
     return result;
 }
@@ -1674,7 +1666,10 @@ void YettyImpl::initEventLoop() noexcept {
         return;
     }
     _frameTimerId = *frameTimerResult;
-    if (auto res = loop->configTimer(_frameTimerId, 16); !res) {  // 60 FPS
+    // VNC client mode: render on server frames only, use slow timer (1fps) for status/reconnect
+    // Normal mode: 60 FPS timer drives rendering
+    uint32_t timerIntervalMs = _vncClientMode ? 1000 : 16;
+    if (auto res = loop->configTimer(_frameTimerId, timerIntervalMs); !res) {
         yerror("Failed to configure frame timer: {}", error_msg(res));
         return;
     }
@@ -1758,10 +1753,12 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
         event.type == base::Event::Type::ScreenUpdate) {
         ydebug("onEvent: frame timer fired, calling mainLoopIteration");
         // Check if window should close
-        if (_surfaceManager && _surfaceManager->shouldClose()) {
-            ydebug("Window close requested, stopping event loop");
-            (*base::EventLoop::instance())->stop();
-            return Ok(true);
+        if (!_vncHeadless) {
+            if (auto surfaceResult = SurfaceManager::instance(); surfaceResult && (*surfaceResult)->shouldClose()) {
+                ydebug("Window close requested, stopping event loop");
+                (*base::EventLoop::instance())->stop();
+                return Ok(true);
+            }
         }
         // Process GPU events so async callbacks (like render done) can fire
         wgpuInstanceProcessEvents(_instance);
@@ -1774,28 +1771,32 @@ Result<bool> YettyImpl::onEvent(const base::Event& event) {
     }
 
     // SetCursor event: change mouse cursor shape
-    if (event.type == base::Event::Type::SetCursor && _surfaceManager) {
-        int shape = event.setCursor.shape;
-        // Map cursor constants to CursorType
-        CursorType cursorType = CursorType::Arrow;
-        switch (shape) {
-            case 0: cursorType = CursorType::Arrow; break;
-            case 0x00036002: cursorType = CursorType::IBeam; break;
-            case 0x00036004: cursorType = CursorType::Hand; break;
-            case 0x00036005: cursorType = CursorType::ResizeH; break;
-            case 0x00036006: cursorType = CursorType::ResizeV; break;
-            default: cursorType = CursorType::Arrow; break;
+    if (event.type == base::Event::Type::SetCursor && !_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            int shape = event.setCursor.shape;
+            // Map cursor constants to CursorType
+            CursorType cursorType = CursorType::Arrow;
+            switch (shape) {
+                case 0: cursorType = CursorType::Arrow; break;
+                case 0x00036002: cursorType = CursorType::IBeam; break;
+                case 0x00036004: cursorType = CursorType::Hand; break;
+                case 0x00036005: cursorType = CursorType::ResizeH; break;
+                case 0x00036006: cursorType = CursorType::ResizeV; break;
+                default: cursorType = CursorType::Arrow; break;
+            }
+            (*surfaceResult)->setCursor(cursorType);
         }
-        _surfaceManager->setCursor(cursorType);
         return Ok(true);
     }
 
     // Copy event: write selected text to system clipboard
-    if (event.type == base::Event::Type::Copy && event.payload && _clipboardManager) {
-        auto text = std::static_pointer_cast<std::string>(event.payload);
-        if (text && !text->empty()) {
-            _clipboardManager->setText(*text);
-            ydebug("Clipboard: copied {} bytes", text->size());
+    if (event.type == base::Event::Type::Copy && event.payload && !_vncHeadless) {
+        if (auto clipboardResult = ClipboardManager::instance(); clipboardResult) {
+            auto text = std::static_pointer_cast<std::string>(event.payload);
+            if (text && !text->empty()) {
+                (*clipboardResult)->setText(*text);
+                ydebug("Clipboard: copied {} bytes", text->size());
+            }
         }
         return Ok(true);
     }
@@ -1928,8 +1929,18 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     }
 
     // Update shared uniforms
-    static double lastTime = _surfaceManager->getTime();
-    double now = _surfaceManager->getTime();
+    double now = 0.0;
+    if (!_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            now = (*surfaceResult)->getTime();
+        }
+    } else {
+        // Headless mode: use monotonic clock
+        static auto startTime = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::steady_clock::now() - startTime;
+        now = std::chrono::duration<double>(elapsed).count();
+    }
+    static double lastTime = now;
     float deltaTime = static_cast<float>(now - lastTime);
     lastTime = now;
 
@@ -1939,7 +1950,10 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
         windowWidth = _vncRequestedWidth > 0 ? static_cast<int>(_vncRequestedWidth) : static_cast<int>(_initialWidth);
         windowHeight = _vncRequestedHeight > 0 ? static_cast<int>(_vncRequestedHeight) : static_cast<int>(_initialHeight);
     } else {
-        _surfaceManager->getWindowSize(windowWidth, windowHeight);
+        windowWidth = windowHeight = 0;
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->getWindowSize(windowWidth, windowHeight);
+        }
     }
 
     _sharedUniforms.time = static_cast<float>(now);
@@ -1989,7 +2003,6 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     static double lastDbgTime = 0;
     if (_vncHeadless) {
         if (doCapture) captureCount++; else skipCount++;
-        double now = _surfaceManager->getTime();
         if (now - lastDbgTime >= 1.0) {
             ydebug("VNC STATS: captures={} skips={} ackReady={}", captureCount, skipCount, vncServerReady);
             captureCount = skipCount = 0;
@@ -2238,14 +2251,13 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
     if (!_vncHeadless || doCapture) {
         _frameCount++;
     }
-    double fpsNow = _surfaceManager->getTime();
-    if (fpsNow - _lastFpsTime >= 1.0) {
+    if (now - _lastFpsTime >= 1.0) {
         ydebug("FPS: {}", _frameCount);
         if (_yettyContext.yguiOverlay) {
             _yettyContext.yguiOverlay->setFps(_frameCount);
         }
         _frameCount = 0;
-        _lastFpsTime = fpsNow;
+        _lastFpsTime = now;
     }
 
     // _inRender cleared by wgpuQueueOnSubmittedWorkDone callback when GPU finishes
@@ -2293,8 +2305,12 @@ void YettyImpl::handleResize(int newWidth, int newHeight) noexcept {
     if (newWidth == 0 || newHeight == 0) return;
 
     // Update content scale (framebuffer / window)
-    int windowWidth, windowHeight;
-    _surfaceManager->getWindowSize(windowWidth, windowHeight);
+    int windowWidth = newWidth, windowHeight = newHeight;
+    if (!_vncHeadless) {
+        if (auto surfaceResult = SurfaceManager::instance(); surfaceResult) {
+            (*surfaceResult)->getWindowSize(windowWidth, windowHeight);
+        }
+    }
     if (windowWidth > 0 && windowHeight > 0) {
         _contentScaleX = static_cast<float>(newWidth) / static_cast<float>(windowWidth);
         _contentScaleY = static_cast<float>(newHeight) / static_cast<float>(windowHeight);

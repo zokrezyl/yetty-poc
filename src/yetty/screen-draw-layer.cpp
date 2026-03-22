@@ -129,7 +129,7 @@ Result<void> ScreenDrawLayerImpl::init() noexcept {
 }
 
 Result<void> ScreenDrawLayerImpl::buildShaderSource(std::string& source) {
-    std::string shaderDir = _ctx.fsPathManager->getShadersDir();
+    std::string shaderDir = _ctx.config->get<std::string>("paths/shaders", "");
 
     // Read overlay shader (reuse ygui-overlay shader)
     std::string overlayPath = shaderDir + "/ygui-overlay.wgsl";

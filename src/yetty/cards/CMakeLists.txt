@@ -15,7 +15,9 @@ add_subdirectory(yplot)
 
 add_subdirectory(ypdf)
 add_subdirectory(yhtml)
-add_subdirectory(ythorvg)
+if(YETTY_ENABLE_THORVG)
+    add_subdirectory(ythorvg)
+endif()
 add_subdirectory(ywasm)
 
 # yvideo requires too many storage buffers for WebAssembly (11 > 10 limit)
@@ -41,9 +43,12 @@ target_link_libraries(yetty_cards INTERFACE
     yetty_card_yplot
     yetty_card_ypdf
     yetty_card_yhtml
-    yetty_card_ythorvg
     yetty_card_ywasm
 )
+
+if(YETTY_ENABLE_THORVG)
+    target_link_libraries(yetty_cards INTERFACE yetty_card_ythorvg)
+endif()
 
 if(NOT EMSCRIPTEN)
     target_link_libraries(yetty_cards INTERFACE yetty_card_yvideo)

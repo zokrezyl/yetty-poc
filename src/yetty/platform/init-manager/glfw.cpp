@@ -46,15 +46,22 @@ public:
         std::promise<Result<void>> resultPromise;
         auto resultFuture = resultPromise.get_future();
 
-        std::thread renderThread([this, config, &resultPromise]() {
+        // Check for headless mode BEFORE creating window
+        bool headless = config->get<bool>("vnc/headless", false);
+
+        std::thread renderThread([this, config, headless, &resultPromise]() {
             ydebug("Render thread started");
 
-            // Create window
-            auto windowResult = GlfwWindowSingleton::instance();
-            if (!windowResult) {
-                resultPromise.set_value(Err<void>("Failed to create window", windowResult));
-                stop();
-                return;
+            // Create window (skip in headless mode)
+            if (!headless) {
+                auto windowResult = GlfwWindowSingleton::instance();
+                if (!windowResult) {
+                    resultPromise.set_value(Err<void>("Failed to create window", windowResult));
+                    stop();
+                    return;
+                }
+            } else {
+                ydebug("Headless mode: skipping window creation");
             }
 
             // Create Yetty with Config
@@ -87,14 +94,20 @@ public:
             stop();
         });
 
-        ydebug("GlfwInitManager: starting event loop");
+        ydebug("GlfwInitManager: starting event loop (headless={})", headless);
         _running = true;
-        while (_running) {
-            glfwWaitEvents();
+        if (headless) {
+            // Headless mode: no GLFW window, just wait for render thread
+            // The render thread runs its own event loop (libuv)
+            renderThread.join();
+        } else {
+            // Normal mode: GLFW event loop
+            while (_running) {
+                glfwWaitEvents();
+            }
+            ydebug("GlfwInitManager: event loop ended");
+            renderThread.join();
         }
-        ydebug("GlfwInitManager: event loop ended");
-
-        renderThread.join();
         ydebug("GlfwInitManager: render thread joined");
 
         return resultFuture.get();

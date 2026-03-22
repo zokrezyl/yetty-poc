@@ -9,8 +9,10 @@
 #include <yetty/gpu-memory-manager.h>
 #include <yetty/card-factory.h>
 #include <yetty/config.h>
-#include <yetty/platform/surface-manager.h>
-#include <yetty/platform/fs-path-manager.h>
+// Platform singletons accessed via ::instance() when needed:
+// - SurfaceManager (window management)
+// - ClipboardManager (system clipboard)
+// Platform paths are in Config under "paths/*" (shaders, fonts, msdf-fonts, runtime, bin)
 #include <yetty/platform/pty-manager.h>
 
 #include <memory>
@@ -46,9 +48,7 @@ struct YettyContext {
     // Application config (tree-like, runtime writable)
     Config::Ptr config;
 
-    // Platform managers
-    SurfaceManager::Ptr surfaceManager;
-    FsPathManager::Ptr fsPathManager;
+    // PTY manager (not a singleton - platform-specific)
     PtyManager::Ptr ptyManager;
 };
 

@@ -105,7 +105,10 @@ add_subdirectory(yrich)
 add_subdirectory(ypaint)
 add_subdirectory(diagram)
 add_subdirectory(ygrid)
-add_subdirectory(ythorvg)
+# ythorvg requires thorvg which overrides global new/delete - disabled by default
+if(YETTY_ENABLE_THORVG)
+    add_subdirectory(ythorvg)
+endif()
 # yvideo requires dav1d/openh264 not available on WebAssembly
 if(NOT EMSCRIPTEN)
     add_subdirectory(yvideo)

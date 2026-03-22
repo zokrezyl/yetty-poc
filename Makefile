@@ -161,7 +161,10 @@ build-desktop-ytrace-asan: ## Build desktop ytrace ASAN
 
 .PHONY: run-desktop-ytrace-asan
 run-desktop-ytrace-asan: build-desktop-ytrace-asan ## Run desktop ytrace ASAN build
-	./$(BUILD_DIR_DESKTOP_YTRACE_ASAN)/yetty
+	@# Dawn WebGPU uses prebuilt Release binaries (no ASAN). When ASAN-instrumented code
+	@# links against non-ASAN Dawn, memory allocated by Dawn's slab allocator isn't tracked.
+	@# halt_on_error=0 allows continuing despite Dawn allocator false positives.
+	ASAN_OPTIONS=halt_on_error=0:detect_leaks=1 ./$(BUILD_DIR_DESKTOP_YTRACE_ASAN)/yetty
 
 #=============================================================================
 # Desktop - yinfo (minimal logging for release/perf testing)
