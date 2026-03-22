@@ -1891,6 +1891,15 @@ Result<void> YettyImpl::mainLoopIteration() noexcept {
             float wsH = std::max(1.0f, static_cast<float>(_pendingResizeH) - statusbarHeight);
             _activeWorkspace->resize(static_cast<float>(_pendingResizeW), wsH);
         }
+        // VNC client mode: send resize to server (was deferred because _inRender was true)
+        if (_vncClientMode && _vncClient && _pendingResizeW > 0 && _pendingResizeH > 0) {
+            float statusbarH = _yettyContext.yguiOverlay ? _yettyContext.yguiOverlay->getStatusbarHeight() : 0.0f;
+            int vncH = static_cast<int>(_pendingResizeH) - static_cast<int>(statusbarH);
+            if (vncH > 0) {
+                _vncClient->sendResize(static_cast<uint16_t>(_pendingResizeW), static_cast<uint16_t>(vncH));
+                ydebug("VNC client sent deferred resize: {}x{}", _pendingResizeW, vncH);
+            }
+        }
     }
 
     // In headless mode with no client connected, skip entire render iteration
