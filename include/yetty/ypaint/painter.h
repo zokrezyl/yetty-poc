@@ -169,6 +169,7 @@ public:
   static constexpr uint32_t FLAG_HAS_3D = 8;
   static constexpr uint32_t FLAG_UNIFORM_SCALE = 16;
   static constexpr uint32_t FLAG_CUSTOM_ATLAS = 32;
+  static constexpr uint32_t FLAG_SCROLLING_MODE = 64;
 
   //=========================================================================
   // Factory methods

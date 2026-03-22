@@ -25,8 +25,14 @@ Result<void> flushMetadata() {
   float contentH = _sceneMaxY - _sceneMinY;
   int16_t panXi16 = static_cast<int16_t>(std::clamp(
       _viewPanX / std::max(contentW, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
-  int16_t panYi16 = static_cast<int16_t>(std::clamp(
-      _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+  // In scrolling mode, panY field is repurposed to hold cursorRow for cell lookup
+  int16_t panYi16;
+  if (_scrollingMode) {
+    panYi16 = static_cast<int16_t>(_cursorRow);
+  } else {
+    panYi16 = static_cast<int16_t>(std::clamp(
+        _viewPanY / std::max(contentH, 1e-6f) * 16384.0f, -32768.0f, 32767.0f));
+  }
 
   uint32_t primOffset =
       _primHandle.isValid() ? _primHandle.offset / sizeof(float) : 0;
@@ -50,7 +56,11 @@ Result<void> flushMetadata() {
   meta.heightCells =
       (_viewHeightCells & 0xFFFF) |
       (static_cast<uint32_t>(static_cast<uint16_t>(panYi16)) << 16);
-  meta.flags = (_flags & 0xFFFF) | (zoomBits << 16);
+  uint32_t metaFlags = _flags;
+  if (_scrollingMode) {
+    metaFlags |= FLAG_SCROLLING_MODE;
+  }
+  meta.flags = (metaFlags & 0xFFFF) | (zoomBits << 16);
   meta.bgColor = _bgColor;
 
   ydebug("flushMetadata: primOff={} primCnt={} gridOff={} grid={}x{} "
