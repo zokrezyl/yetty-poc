@@ -2959,10 +2959,7 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
     // Sync scrolling painter - vterm is source of truth here
     if (self->_scrollingPainter) {
       self->_scrollingPainter->scrollLines(static_cast<uint16_t>(downward));
-      // Sync dirty grid to GPU immediately
-      if (auto res = self->_scrollingPainter->writeBuffers(); !res) {
-        yerror("onScrollRect: writeBuffers failed: {}", error_msg(res));
-      }
+      // writeBuffers() deferred to render loop (once per frame)
       ydebug("onScrollRect: scrolled painter {} lines (vterm-driven)", downward);
     }
   } else if (downward < 0) {
@@ -2978,10 +2975,7 @@ int GPUScreenImpl::onScrollRect(VTermRect rect, int downward, int rightward,
       // Sync scrolling painter for upward scroll too
       if (self->_scrollingPainter) {
         self->_scrollingPainter->scrollLines(static_cast<uint16_t>(upAmount));
-        // Sync dirty grid to GPU immediately
-        if (auto res = self->_scrollingPainter->writeBuffers(); !res) {
-          yerror("onScrollRect: writeBuffers failed: {}", error_msg(res));
-        }
+        // writeBuffers() deferred to render loop (once per frame)
         ydebug("onScrollRect: scrolled painter {} lines (vterm-driven, up)",
                upAmount);
       }
@@ -5679,6 +5673,20 @@ Result<void> GPUScreenImpl::render(WGPURenderPassEncoder pass) {
       yerror("GPUScreen::render: card '{}' finalize FAILED: {}",
              card->typeName(), error_msg(res));
       return Err<void>("GPUScreen::render: card finalize failed", res);
+    }
+  }
+
+  // Update ypaint painters if dirty (deferred from scroll events)
+  if (_scrollingPainter && _scrollingPainter->hasContent()) {
+    if (auto res = _scrollingPainter->writeBuffers(); !res) {
+      yerror("GPUScreen::render: scrollingPainter writeBuffers failed: {}",
+             error_msg(res));
+    }
+  }
+  if (_overlayPainter && _overlayPainter->hasContent()) {
+    if (auto res = _overlayPainter->writeBuffers(); !res) {
+      yerror("GPUScreen::render: overlayPainter writeBuffers failed: {}",
+             error_msg(res));
     }
   }
 
