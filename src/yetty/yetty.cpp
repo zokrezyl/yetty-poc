@@ -390,23 +390,8 @@ Result<void> YettyImpl::init(Config::Ptr config) noexcept {
     // Create RPC server and write socket path to config BEFORE workspace/terminal
     // (Terminal reads shell/env from config when forking the shell)
     if (_yettyContext.config->get<bool>("rpc/enabled", true)) {
-        // Use socket-path from config if specified, otherwise use runtime dir
-        std::string socketPath;
-        auto configPath = _yettyContext.config->get<std::string>("rpc/socket-path", "");
-        if (!configPath.empty()) {
-            // Config specifies a directory - add socket filename
-            socketPath = configPath;
-            if (socketPath.back() == '/') {
-                socketPath.pop_back();
-            }
-            socketPath += "/yetty-" + std::to_string(getpid()) + ".sock";
-        } else {
-            auto socketResult = rpc::createSocketPath(_fsPathManager->getRuntimeDir());
-            if (!socketResult) {
-                return Err<void>("Failed to create RPC socket path", socketResult);
-            }
-            socketPath = *socketResult;
-        }
+        // socket-path is already set by config (with PID) from CLI flag or generated path
+        auto socketPath = _yettyContext.config->get<std::string>("rpc/socket-path", "");
         auto rpcResult = rpc::RpcServer::create(socketPath);
         if (!rpcResult) {
             return Err<void>("Failed to create RPC server", rpcResult);
