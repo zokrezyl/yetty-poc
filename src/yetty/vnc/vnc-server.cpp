@@ -1,0 +1,1660 @@
+#include "vnc-server.h"
+#include <yetty/platform/event-loop.h>
+#include <yetty/base/event-queue.h>
+#include <ytrace/ytrace.hpp>
+#include <turbojpeg.h>
+#include "socket-compat.h"
+#include <cstring>
+#include <chrono>
+#include <algorithm>
+
+namespace yetty::vnc {
+
+using yetty::Result;
+using yetty::Ok;
+using yetty::Err;
+
+VncServer::VncServer(WGPUDevice device, WGPUQueue queue)
+    : _device(device), _queue(queue) {
+    _jpegCompressor = tjInitCompress();
+}
+
+// Compute shader for tile diff detection
+// Each workgroup handles one tile (64x64), 8x8 threads each check 8x8 pixels = full coverage
+static const char* DIFF_SHADER = R"(
+@group(0) @binding(0) var currTex: texture_2d<f32>;
+@group(0) @binding(1) var prevTex: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> dirtyFlags: array<u32>;
+
+const TILE_SIZE: u32 = 64;
+const PIXELS_PER_THREAD: u32 = 8;  // 64/8 = 8 pixels per thread per dimension
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wgid: vec3<u32>) {
+    let dims = textureDimensions(currTex);
+    let tilesX = (dims.x + TILE_SIZE - 1u) / TILE_SIZE;
+    let tileIdx = wgid.y * tilesX + wgid.x;
+    let tileStartX = wgid.x * TILE_SIZE;
+    let tileStartY = wgid.y * TILE_SIZE;
+
+    // Each thread checks an 8x8 region of pixels within the tile
+    let regionStartX = tileStartX + lid.x * PIXELS_PER_THREAD;
+    let regionStartY = tileStartY + lid.y * PIXELS_PER_THREAD;
+
+    for (var dy: u32 = 0u; dy < PIXELS_PER_THREAD; dy++) {
+        for (var dx: u32 = 0u; dx < PIXELS_PER_THREAD; dx++) {
+            let px = regionStartX + dx;
+            let py = regionStartY + dy;
+
+            if (px >= dims.x || py >= dims.y) {
+                continue;
+            }
+
+            let curr = textureLoad(currTex, vec2<u32>(px, py), 0);
+            let prev = textureLoad(prevTex, vec2<u32>(px, py), 0);
+
+            if (any(curr != prev)) {
+                dirtyFlags[tileIdx] = 1u;
+                return;  // Early exit once we find a difference
+            }
+        }
+    }
+}
+)";
+
+// CPU-based BGRA to YUV420 conversion (BT.709, video range)
+static void convertBgraToYuv420Cpu(
+    const uint8_t* bgra, uint32_t width, uint32_t height, uint32_t bgraStride,
+    uint8_t* yPlane, uint8_t* uPlane, uint8_t* vPlane,
+    uint32_t yStride, uint32_t uvStride)
+{
+    // BT.709 coefficients for video range (16-235 Y, 16-240 UV)
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t* row = bgra + y * bgraStride;
+        uint8_t* yRow = yPlane + y * yStride;
+
+        for (uint32_t x = 0; x < width; x++) {
+            uint8_t b = row[x * 4 + 0];
+            uint8_t g = row[x * 4 + 1];
+            uint8_t r = row[x * 4 + 2];
+
+            // Y = 16 + (66*R + 129*G + 25*B + 128) >> 8
+            int yVal = 16 + ((66 * r + 129 * g + 25 * b + 128) >> 8);
+            yRow[x] = static_cast<uint8_t>(std::clamp(yVal, 16, 235));
+        }
+    }
+
+    // UV planes at half resolution
+    uint32_t uvHeight = height / 2;
+    uint32_t uvWidth = width / 2;
+
+    for (uint32_t uvY = 0; uvY < uvHeight; uvY++) {
+        uint8_t* uRow = uPlane + uvY * uvStride;
+        uint8_t* vRow = vPlane + uvY * uvStride;
+
+        for (uint32_t uvX = 0; uvX < uvWidth; uvX++) {
+            uint32_t srcX = uvX * 2;
+            uint32_t srcY = uvY * 2;
+
+            int sumR = 0, sumG = 0, sumB = 0;
+            for (int dy = 0; dy < 2 && srcY + dy < height; dy++) {
+                const uint8_t* row = bgra + (srcY + dy) * bgraStride;
+                for (int dx = 0; dx < 2 && srcX + dx < width; dx++) {
+                    sumB += row[(srcX + dx) * 4 + 0];
+                    sumG += row[(srcX + dx) * 4 + 1];
+                    sumR += row[(srcX + dx) * 4 + 2];
+                }
+            }
+
+            int avgR = sumR / 4;
+            int avgG = sumG / 4;
+            int avgB = sumB / 4;
+
+            int cb = 128 + ((-38 * avgR - 74 * avgG + 112 * avgB + 128) >> 8);
+            int cr = 128 + ((112 * avgR - 94 * avgG - 18 * avgB + 128) >> 8);
+
+            uRow[uvX] = static_cast<uint8_t>(std::clamp(cb, 16, 240));
+            vRow[uvX] = static_cast<uint8_t>(std::clamp(cr, 16, 240));
+        }
+    }
+}
+
+VncServer::~VncServer() {
+    stop();
+
+    if (_prevTexture) wgpuTextureRelease(_prevTexture);
+    if (_dirtyFlagsBuffer) wgpuBufferRelease(_dirtyFlagsBuffer);
+    if (_dirtyFlagsReadback) wgpuBufferRelease(_dirtyFlagsReadback);
+    if (_tileReadbackBuffer) wgpuBufferRelease(_tileReadbackBuffer);
+    if (_diffPipeline) wgpuComputePipelineRelease(_diffPipeline);
+    if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
+    if (_diffBindGroupLayout) wgpuBindGroupLayoutRelease(_diffBindGroupLayout);
+    if (_jpegCompressor) tjDestroy(static_cast<tjhandle>(_jpegCompressor));
+}
+
+Result<void> VncServer::start(uint16_t port) {
+    if (_running) return Err<void>("Server already running");
+
+    // Get EventQueue for thread-safe GPU callback wakeups
+    auto queueResult = base::EventQueue::instance();
+    if (!queueResult) {
+        return Err<void>("EventQueue not available", queueResult);
+    }
+    _eventQueue = *queueResult;
+
+    sock::init();  // No-op on POSIX, WSAStartup on Windows
+
+    _serverFd = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
+    if (_serverFd < 0) return Err<void>("Failed to create socket");
+
+    int opt = 1;
+    sock::setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, opt);
+
+    // Set non-blocking for async accept
+    sock::set_nonblocking(_serverFd);
+
+    struct sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+
+    if (::bind(_serverFd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to bind to port " + std::to_string(port));
+    }
+
+    if (::listen(_serverFd, 5) < 0) {
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to listen");
+    }
+
+    // Register server socket with EventLoop for async accept
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) {
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("EventLoop not available");
+    }
+    auto loop = *loopResult;
+
+    auto pollResult = loop->createPoll();
+    if (!pollResult) {
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to create server poll", pollResult);
+    }
+    _serverPollId = *pollResult;
+
+    if (auto res = loop->configPoll(_serverPollId, _serverFd); !res) {
+        loop->destroyPoll(_serverPollId);
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to configure server poll", res);
+    }
+
+    if (auto res = loop->registerPollListener(_serverPollId, sharedAs<base::EventListener>()); !res) {
+        loop->destroyPoll(_serverPollId);
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to register server poll listener", res);
+    }
+
+    if (auto res = loop->startPoll(_serverPollId); !res) {
+        loop->destroyPoll(_serverPollId);
+        sock::close(_serverFd);
+        _serverFd = -1;
+        return Err<void>("Failed to start server poll", res);
+    }
+
+    _port = port;
+    _running = true;
+
+    ydebug("VNC server listening on port {} (async) serverFd={} pollId={}", port, _serverFd, _serverPollId);
+    return Ok();
+}
+
+void VncServer::stop() {
+    _running = false;
+
+    auto loopResult = base::EventLoop::instance();
+
+    // Unregister server poll
+    if (_serverPollId >= 0 && loopResult) {
+        auto loop = *loopResult;
+        loop->stopPoll(_serverPollId);
+        loop->destroyPoll(_serverPollId);
+        _serverPollId = -1;
+    }
+
+    if (_serverFd >= 0) {
+        ::shutdown(_serverFd, SHUT_RDWR);
+        sock::close(_serverFd);
+        _serverFd = -1;
+    }
+
+    // Unregister and close all client connections
+    {
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        for (int fd : _clients) {
+            // Unregister client poll
+            auto it = _clientPollIds.find(fd);
+            if (it != _clientPollIds.end() && loopResult) {
+                auto loop = *loopResult;
+                loop->stopPoll(it->second);
+                loop->destroyPoll(it->second);
+            }
+            ::shutdown(fd, SHUT_RDWR);
+            sock::close(fd);
+        }
+        _clients.clear();
+        _clientPollIds.clear();
+        _pollIdToFd.clear();
+        _clientCount = 0;
+    }
+
+    _clientInputBuffers.clear();
+    _clientSendBuffers.clear();
+}
+
+void VncServer::handleAccept() {
+    ydebug("VNC handleAccept called");
+    // Accept all pending connections (non-blocking)
+    while (true) {
+        struct sockaddr_in clientAddr;
+        socklen_t clientLen = sizeof(clientAddr);
+        int clientFd = static_cast<int>(::accept(_serverFd, (struct sockaddr*)&clientAddr, &clientLen));
+        if (clientFd < 0) {
+            if (sock::would_block()) {
+                break;  // No more pending connections
+            }
+            ywarn("VNC accept failed: {}", sock::last_error_string());
+            break;
+        }
+
+        // Disable Nagle
+        int flag = 1;
+        sock::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, flag);
+
+        // Set non-blocking for async I/O
+        sock::set_nonblocking(clientFd);
+
+        char clientIp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
+        ydebug("VNC client connected from {}", clientIp);
+
+        {
+            std::lock_guard<std::mutex> lock(_clientsMutex);
+            _clients.push_back(clientFd);
+            _clientCount = _clients.size();
+            _clientInputBuffers[clientFd] = ClientInputBuffer{};
+            _clientSendBuffers[clientFd] = ClientSendBuffer{};
+            _forceFullFrame = true;  // Send full frame to new client
+        }
+
+        // Register client socket for async I/O (we're on main thread now)
+        if (auto res = registerClientPoll(clientFd); !res) {
+            ywarn("Failed to register client poll: {}", res.error().message());
+        }
+    }
+}
+
+Result<void> VncServer::sendToClient(int clientFd, const void* data, size_t size) {
+    const uint8_t* ptr = static_cast<const uint8_t*>(data);
+
+    // If send queue has data, append to it (preserve ordering)
+    auto it = _clientSendBuffers.find(clientFd);
+    if (it != _clientSendBuffers.end() && !it->second.queue.empty()) {
+        it->second.queue.insert(it->second.queue.end(), ptr, ptr + size);
+        ydebug("VNC sendToClient: fd={} queued {} bytes (queue has data)", clientFd, size);
+        return Ok();
+    }
+
+    // Try to send directly first
+    size_t remaining = size;
+    while (remaining > 0) {
+        ssize_t sent = sock::send(clientFd, ptr, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (sent > 0) {
+            ptr += sent;
+            remaining -= sent;
+            continue;
+        }
+        if (sent < 0 && sock::would_block()) {
+            // Queue remaining data for async send
+            if (it == _clientSendBuffers.end()) {
+                it = _clientSendBuffers.emplace(clientFd, ClientSendBuffer{}).first;
+            }
+            it->second.queue.insert(it->second.queue.end(), ptr, ptr + remaining);
+            ydebug("VNC sendToClient: fd={} queued {} bytes on EAGAIN", clientFd, remaining);
+            updateClientPollEvents(clientFd);
+            return Ok();
+        }
+        // Real error
+        return Err<void>("Send failed: " + sock::last_error_string());
+    }
+    return Ok();
+}
+
+void VncServer::drainClientSendQueue(int clientFd) {
+    auto it = _clientSendBuffers.find(clientFd);
+    if (it == _clientSendBuffers.end() || it->second.queue.empty()) {
+        return;
+    }
+
+    auto& buf = it->second;
+    while (buf.offset < buf.queue.size()) {
+        size_t remaining = buf.queue.size() - buf.offset;
+        ssize_t sent = sock::send(clientFd, buf.queue.data() + buf.offset, remaining, MSG_NOSIGNAL | MSG_DONTWAIT);
+
+        if (sent <= 0) {
+            if (sock::would_block()) {
+                ydebug("VNC drainClientSendQueue: fd={} EAGAIN, {} bytes remaining", clientFd, remaining);
+                return;
+            }
+            ywarn("VNC drainClientSendQueue: fd={} send failed: {}", clientFd, sock::last_error_string());
+            buf.queue.clear();
+            buf.offset = 0;
+            updateClientPollEvents(clientFd);
+            return;
+        }
+
+        buf.offset += sent;
+        ydebug("VNC drainClientSendQueue: fd={} sent {} bytes, {} remaining", clientFd, sent, buf.queue.size() - buf.offset);
+    }
+
+    // All sent
+    buf.queue.clear();
+    buf.offset = 0;
+    updateClientPollEvents(clientFd);
+    ydebug("VNC drainClientSendQueue: fd={} queue drained", clientFd);
+}
+
+void VncServer::updateClientPollEvents(int clientFd) {
+    auto pollIt = _clientPollIds.find(clientFd);
+    if (pollIt == _clientPollIds.end()) return;
+
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) return;
+    auto loop = *loopResult;
+
+    int events = base::EventLoop::POLL_READABLE;
+
+    auto bufIt = _clientSendBuffers.find(clientFd);
+    if (bufIt != _clientSendBuffers.end() && !bufIt->second.queue.empty()) {
+        events |= base::EventLoop::POLL_WRITABLE;
+    }
+
+    loop->setPollEvents(pollIt->second, events);
+}
+
+Result<void> VncServer::ensureResources(uint32_t width, uint32_t height) {
+    if (_lastWidth == width && _lastHeight == height && _prevTexture) {
+        return Ok();
+    }
+
+    // Release old resources
+    // IMPORTANT: Unmap buffers before releasing - they may have pending async map operations
+    // from a state machine that was interrupted by resize. Unmap is safe even if not mapped.
+    if (_prevTexture) { wgpuTextureRelease(_prevTexture); _prevTexture = nullptr; }
+    if (_dirtyFlagsBuffer) { wgpuBufferRelease(_dirtyFlagsBuffer); _dirtyFlagsBuffer = nullptr; }
+    if (_dirtyFlagsReadback) {
+        wgpuBufferUnmap(_dirtyFlagsReadback);  // Safe even if not mapped
+        wgpuBufferRelease(_dirtyFlagsReadback);
+        _dirtyFlagsReadback = nullptr;
+    }
+    if (_diffBindGroup) { wgpuBindGroupRelease(_diffBindGroup); _diffBindGroup = nullptr; }
+    if (_tileReadbackBuffer) {
+        wgpuBufferUnmap(_tileReadbackBuffer);  // Safe even if not mapped
+        wgpuBufferRelease(_tileReadbackBuffer);
+        _tileReadbackBuffer = nullptr;
+        _tileReadbackBufferSize = 0;
+    }
+
+    _lastWidth = width;
+    _lastHeight = height;
+    _tilesX = tiles_x(width);
+    _tilesY = tiles_y(height);
+    _dirtyTiles.resize(_tilesX * _tilesY);
+
+    // Create previous frame texture (for comparison)
+    WGPUTextureDescriptor texDesc = {};
+    texDesc.size = {width, height, 1};
+    texDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    texDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+    texDesc.dimension = WGPUTextureDimension_2D;
+    _prevTexture = wgpuDeviceCreateTexture(_device, &texDesc);
+    if (!_prevTexture) return Err<void>("Failed to create prev texture");
+
+    // Create dirty flags buffer (1 uint32 per tile)
+    // Needs Storage for compute shader, CopySrc to copy to readback, CopyDst for ClearBuffer
+    uint32_t numTiles = _tilesX * _tilesY;
+    WGPUBufferDescriptor bufDesc = {};
+    bufDesc.size = numTiles * sizeof(uint32_t);
+    bufDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst;
+    _dirtyFlagsBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_dirtyFlagsBuffer) return Err<void>("Failed to create dirty flags buffer");
+
+    // Create readback buffer for dirty flags
+    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+    _dirtyFlagsReadback = wgpuDeviceCreateBuffer(_device, &bufDesc);
+    if (!_dirtyFlagsReadback) return Err<void>("Failed to create dirty flags readback");
+
+    // Create compute pipeline if needed
+    if (!_diffPipeline) {
+        if (auto res = createDiffPipeline(); !res) return res;
+    }
+
+    ydebug("VNC server resources: {}x{}, {} tiles", width, height, numTiles);
+    return Ok();
+}
+
+Result<void> VncServer::createDiffPipeline() {
+    // Create shader module
+    WGPUShaderSourceWGSL wgslDesc = {};
+    wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgslDesc.code = {DIFF_SHADER, strlen(DIFF_SHADER)};
+    WGPUShaderModuleDescriptor shaderDesc = {};
+    shaderDesc.nextInChain = &wgslDesc.chain;
+    WGPUShaderModule shader = wgpuDeviceCreateShaderModule(_device, &shaderDesc);
+    if (!shader) return Err<void>("Failed to create diff shader");
+
+    // Bind group layout: currTex, prevTex, dirtyFlags
+    WGPUBindGroupLayoutEntry entries[3] = {};
+    entries[0].binding = 0;
+    entries[0].visibility = WGPUShaderStage_Compute;
+    entries[0].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+    entries[1].binding = 1;
+    entries[1].visibility = WGPUShaderStage_Compute;
+    entries[1].texture.sampleType = WGPUTextureSampleType_Float;
+    entries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+    entries[2].binding = 2;
+    entries[2].visibility = WGPUShaderStage_Compute;
+    entries[2].buffer.type = WGPUBufferBindingType_Storage;
+
+    WGPUBindGroupLayoutDescriptor bglDesc = {};
+    bglDesc.entryCount = 3;
+    bglDesc.entries = entries;
+    _diffBindGroupLayout = wgpuDeviceCreateBindGroupLayout(_device, &bglDesc);
+
+    // Pipeline layout
+    WGPUPipelineLayoutDescriptor plDesc = {};
+    plDesc.bindGroupLayoutCount = 1;
+    plDesc.bindGroupLayouts = &_diffBindGroupLayout;
+    WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(_device, &plDesc);
+
+    // Compute pipeline
+    WGPUComputePipelineDescriptor cpDesc = {};
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = shader;
+    cpDesc.compute.entryPoint = {.data = "main", .length = 4};
+
+    _diffPipeline = wgpuDeviceCreateComputePipeline(_device, &cpDesc);
+
+    wgpuShaderModuleRelease(shader);
+    wgpuPipelineLayoutRelease(pipelineLayout);
+
+    if (!_diffPipeline) return Err<void>("Failed to create diff pipeline");
+    return Ok();
+}
+
+Result<void> VncServer::encodeTile(uint16_t tx, uint16_t ty,
+                                    std::vector<uint8_t>& outData, Encoding& outEncoding) {
+    const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+    if (!pixels || (_cpuPixels == nullptr && _gpuReadbackPixels.empty())) {
+        return Err<void>("No pixels for encoding");
+    }
+
+    uint32_t startX = tx * TILE_SIZE;
+    uint32_t startY = ty * TILE_SIZE;
+    uint32_t tileW = std::min((uint32_t)TILE_SIZE, _lastWidth - startX);
+    uint32_t tileH = std::min((uint32_t)TILE_SIZE, _lastHeight - startY);
+
+    // Extract tile pixels from framebuffer
+    // Initialize to zero to avoid JPEG artifacts from garbage data in partial tiles
+    std::vector<uint8_t> tilePixels(TILE_SIZE * TILE_SIZE * 4, 0);
+    uint32_t srcStride = _lastWidth * 4;
+    for (uint32_t y = 0; y < tileH; y++) {
+        const uint8_t* src = pixels + (startY + y) * srcStride + startX * 4;
+        uint8_t* dst = tilePixels.data() + y * TILE_SIZE * 4;
+        std::memcpy(dst, src, tileW * 4);
+    }
+
+    uint32_t rawSize = TILE_SIZE * TILE_SIZE * 4;
+
+    // Use raw encoding if forced, otherwise try JPEG compression
+    if (_forceRaw) {
+        outData = std::move(tilePixels);
+        outEncoding = Encoding::RAW;
+        return Ok();
+    }
+
+    // Try JPEG compression
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+    int result = tjCompress2(
+        static_cast<tjhandle>(_jpegCompressor),
+        tilePixels.data(),
+        TILE_SIZE, 0, TILE_SIZE,
+        TJPF_BGRA,
+        &jpegBuf, &jpegSize,
+        TJSAMP_420, _jpegQuality,
+        TJFLAG_FASTDCT
+    );
+
+    if (result == 0 && jpegSize < rawSize * 0.8) {
+        outData.assign(jpegBuf, jpegBuf + jpegSize);
+        outEncoding = Encoding::JPEG;
+        tjFree(jpegBuf);
+    } else {
+        if (jpegBuf) tjFree(jpegBuf);
+        outData = std::move(tilePixels);
+        outEncoding = Encoding::RAW;
+    }
+
+    return Ok();
+}
+
+Result<void> VncServer::encodeRect(uint16_t px, uint16_t py, uint16_t width, uint16_t height,
+                                   std::vector<uint8_t>& outData, Encoding& outEncoding) {
+    const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+    if (!pixels || (_cpuPixels == nullptr && _gpuReadbackPixels.empty())) {
+        return Err<void>("No pixels for encoding");
+    }
+
+    // Clamp to frame bounds
+    uint16_t rectW = std::min(static_cast<uint32_t>(width), _lastWidth - px);
+    uint16_t rectH = std::min(static_cast<uint32_t>(height), _lastHeight - py);
+
+    // Extract rectangle pixels from framebuffer
+    std::vector<uint8_t> rectPixels(rectW * rectH * 4);
+    uint32_t srcStride = _lastWidth * 4;
+    uint32_t dstStride = rectW * 4;
+    for (uint16_t y = 0; y < rectH; y++) {
+        const uint8_t* src = pixels + (py + y) * srcStride + px * 4;
+        uint8_t* dst = rectPixels.data() + y * dstStride;
+        std::memcpy(dst, src, dstStride);
+    }
+
+    uint32_t rawSize = rectW * rectH * 4;
+
+    // Use raw encoding if forced, otherwise try JPEG compression
+    if (_forceRaw) {
+        outData = std::move(rectPixels);
+        outEncoding = Encoding::RECT_RAW;
+        return Ok();
+    }
+
+    // Try JPEG compression
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+    int result = tjCompress2(
+        static_cast<tjhandle>(_jpegCompressor),
+        rectPixels.data(),
+        rectW, 0, rectH,
+        TJPF_BGRA,
+        &jpegBuf, &jpegSize,
+        TJSAMP_420, _jpegQuality,
+        TJFLAG_FASTDCT
+    );
+
+    if (result == 0 && jpegSize < rawSize * 0.8) {
+        outData.assign(jpegBuf, jpegBuf + jpegSize);
+        outEncoding = Encoding::RECT_JPEG;
+        tjFree(jpegBuf);
+    } else {
+        if (jpegBuf) tjFree(jpegBuf);
+        outData = std::move(rectPixels);
+        outEncoding = Encoding::RECT_RAW;
+    }
+
+    return Ok();
+}
+
+std::vector<VncServer::Rect> VncServer::mergeRectangles() {
+    std::vector<Rect> result;
+
+    // Copy dirty tiles to working set
+    std::vector<bool> used(_tilesX * _tilesY, false);
+
+    // Greedy algorithm: find maximal rectangles
+    for (uint16_t ty = 0; ty < _tilesY; ty++) {
+        for (uint16_t tx = 0; tx < _tilesX; tx++) {
+            uint32_t idx = ty * _tilesX + tx;
+            if (!_dirtyTiles[idx] || used[idx]) continue;
+
+            // Start a new rectangle at this tile
+            uint16_t maxW = 1;
+            uint16_t maxH = 1;
+
+            // Extend width as far as possible
+            while (tx + maxW < _tilesX) {
+                uint32_t nextIdx = ty * _tilesX + tx + maxW;
+                if (!_dirtyTiles[nextIdx] || used[nextIdx]) break;
+                maxW++;
+            }
+
+            // Extend height as far as possible (all columns must be dirty)
+            while (ty + maxH < _tilesY) {
+                bool rowOk = true;
+                for (uint16_t x = 0; x < maxW; x++) {
+                    uint32_t checkIdx = (ty + maxH) * _tilesX + tx + x;
+                    if (!_dirtyTiles[checkIdx] || used[checkIdx]) {
+                        rowOk = false;
+                        break;
+                    }
+                }
+                if (!rowOk) break;
+                maxH++;
+            }
+
+            // Mark tiles as used
+            for (uint16_t dy = 0; dy < maxH; dy++) {
+                for (uint16_t dx = 0; dx < maxW; dx++) {
+                    used[(ty + dy) * _tilesX + tx + dx] = true;
+                }
+            }
+
+            // Add rectangle (in pixels)
+            Rect r;
+            r.x = tx * TILE_SIZE;
+            r.y = ty * TILE_SIZE;
+            r.w = maxW * TILE_SIZE;
+            r.h = maxH * TILE_SIZE;
+
+            // Clamp to frame bounds
+            if (r.x + r.w > _lastWidth) r.w = _lastWidth - r.x;
+            if (r.y + r.h > _lastHeight) r.h = _lastHeight - r.y;
+
+            result.push_back(r);
+        }
+    }
+
+    return result;
+}
+
+Result<void> VncServer::sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height) {
+    if (_clientCount == 0) return Ok();  // No clients, skip
+
+    // If dimensions changed, reset state machine to re-create resources
+    // BUT: Do NOT clear _awaitingAck! We must wait for the client to finish
+    // processing the old frame, otherwise our new frame header gets mixed into
+    // the old frame's data stream causing protocol desync.
+    if (width != _lastWidth || height != _lastHeight) {
+        ydebug("VNC sendFrame: size changed {}x{} -> {}x{}, resetting state (awaitingAck={})",
+               _lastWidth, _lastHeight, width, height, _awaitingAck.load());
+        _captureState = CaptureState::IDLE;
+        _gpuWorkDone = true;
+        // Do NOT clear _awaitingAck - let client finish old frame first
+    }
+
+    // Flow control: wait for client ack before sending next frame
+    if (_awaitingAck) {
+        return Ok();  // Skip this frame, client hasn't acked previous
+    }
+
+    _cpuPixels = cpuPixels;
+    _cpuPixelsSize = width * height * 4;
+
+    // If no CPU pixels provided, prepare to read back from GPU
+    if (!cpuPixels) {
+        _gpuReadbackPixels.resize(width * height * 4);
+    }
+
+    // GPU callbacks use AllowSpontaneous mode - they fire asynchronously
+    // No manual tick needed
+
+    ydebug("VNC sendFrame: state={} gpuWorkDone={}",
+           static_cast<int>(_captureState), _gpuWorkDone.load());
+
+    // State machine for async GPU operations
+    switch (_captureState) {
+        case CaptureState::IDLE: {
+            if (auto res = ensureResources(width, height); !res) {
+                return res;
+            }
+
+            // Check for full refresh
+            _framesSinceFullRefresh++;
+            if (_framesSinceFullRefresh >= FULL_REFRESH_INTERVAL) {
+                _forceFullFrame = true;
+                _framesSinceFullRefresh = 0;
+            }
+
+            // Always full mode: skip delta encoding entirely
+            if (_alwaysFullFrame) {
+                _forceFullFrame = true;
+            }
+
+            WGPUExtent3D extent = {width, height, 1};
+
+            if (_forceFullFrame) {
+                // Skip GPU diff, mark all dirty
+                std::fill(_dirtyTiles.begin(), _dirtyTiles.end(), true);
+                _forceFullFrame = false;
+
+                // Store texture for readback
+                _pendingTexture = texture;
+
+                // Copy current to prev for next frame comparison
+                WGPUCommandEncoder copyEnc = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+                WGPUTexelCopyTextureInfo srcCopy = {};
+                srcCopy.texture = texture;
+                WGPUTexelCopyTextureInfo dstCopy = {};
+                dstCopy.texture = _prevTexture;
+                wgpuCommandEncoderCopyTextureToTexture(copyEnc, &srcCopy, &dstCopy, &extent);
+                WGPUCommandBuffer copyCmd = wgpuCommandEncoderFinish(copyEnc, nullptr);
+                wgpuQueueSubmit(_queue, 1, &copyCmd);
+                wgpuCommandBufferRelease(copyCmd);
+                wgpuCommandEncoderRelease(copyEnc);
+
+                // Go to READY_TO_SEND - next call will kick off pixel readback
+                // DON'T break and fall through to encoding - we need readback first!
+                _captureState = CaptureState::READY_TO_SEND;
+                return Ok();  // Return and let next call do the readback
+            }
+
+            // Store texture for async processing
+            _pendingTexture = texture;
+
+            // Create bind group for this frame
+            if (_diffBindGroup) wgpuBindGroupRelease(_diffBindGroup);
+
+            WGPUTextureView currView = wgpuTextureCreateView(texture, nullptr);
+            WGPUTextureView prevView = wgpuTextureCreateView(_prevTexture, nullptr);
+
+            WGPUBindGroupEntry entries[3] = {};
+            entries[0].binding = 0;
+            entries[0].textureView = currView;
+            entries[1].binding = 1;
+            entries[1].textureView = prevView;
+            entries[2].binding = 2;
+            entries[2].buffer = _dirtyFlagsBuffer;
+            entries[2].size = _tilesX * _tilesY * sizeof(uint32_t);
+
+            WGPUBindGroupDescriptor bgDesc = {};
+            bgDesc.layout = _diffBindGroupLayout;
+            bgDesc.entryCount = 3;
+            bgDesc.entries = entries;
+            _diffBindGroup = wgpuDeviceCreateBindGroup(_device, &bgDesc);
+
+            wgpuTextureViewRelease(currView);
+            wgpuTextureViewRelease(prevView);
+
+            // === BATCHED GPU OPERATIONS ===
+            // Do clear + compute + copy all in ONE encoder to minimize round-trips
+            {
+                WGPUCommandEncoderDescriptor encDesc = {};
+                WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, &encDesc);
+
+                // 1. Clear dirty flags buffer
+                wgpuCommandEncoderClearBuffer(encoder, _dirtyFlagsBuffer, 0, _tilesX * _tilesY * sizeof(uint32_t));
+
+                // 2. Run compute shader for tile diff
+                WGPUComputePassDescriptor cpDesc = {};
+                WGPUComputePassEncoder cpass = wgpuCommandEncoderBeginComputePass(encoder, &cpDesc);
+                wgpuComputePassEncoderSetPipeline(cpass, _diffPipeline);
+                wgpuComputePassEncoderSetBindGroup(cpass, 0, _diffBindGroup, 0, nullptr);
+                wgpuComputePassEncoderDispatchWorkgroups(cpass, _tilesX, _tilesY, 1);
+                wgpuComputePassEncoderEnd(cpass);
+                wgpuComputePassEncoderRelease(cpass);
+
+                // 3. Copy dirty flags to readback buffer
+                wgpuCommandEncoderCopyBufferToBuffer(encoder, _dirtyFlagsBuffer, 0,
+                    _dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t));
+
+                // 4. Copy current texture to prev for next frame comparison
+                WGPUTexelCopyTextureInfo srcCopy = {};
+                srcCopy.texture = _pendingTexture;
+                WGPUTexelCopyTextureInfo dstCopy = {};
+                dstCopy.texture = _prevTexture;
+                wgpuCommandEncoderCopyTextureToTexture(encoder, &srcCopy, &dstCopy, &extent);
+
+                // Submit all at once
+                WGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(encoder, nullptr);
+                wgpuQueueSubmit(_queue, 1, &cmdBuf);
+                wgpuCommandBufferRelease(cmdBuf);
+                wgpuCommandEncoderRelease(encoder);
+            }
+
+            // Register ONE async callback for all GPU work
+            _gpuWorkDone = false;
+            WGPUQueueWorkDoneCallbackInfo cbInfo = {};
+            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            cbInfo.callback = [](WGPUQueueWorkDoneStatus, WGPUStringView, void* ud1, void*) {
+                auto* self = static_cast<VncServer*>(ud1);
+                self->_gpuWorkDone = true;
+                // Wake up main thread via EventQueue (thread-safe)
+                self->_eventQueue->push(base::Event::screenUpdateEvent());
+            };
+            cbInfo.userdata1 = this;
+            wgpuQueueOnSubmittedWorkDone(_queue, cbInfo);
+
+            // Skip WAITING_CLEAR and WAITING_COMPUTE - go directly to WAITING_MAP
+            _captureState = CaptureState::WAITING_COMPUTE;
+            return Ok();  // Return immediately, don't block!
+        }
+
+        case CaptureState::WAITING_CLEAR: {
+            // This state is now unused - all work is batched in IDLE
+            // Keep for backwards compatibility, just fall through
+            _captureState = CaptureState::WAITING_COMPUTE;
+            return Ok();
+        }
+
+        case CaptureState::WAITING_COMPUTE: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting
+            }
+
+            // All GPU work done (clear + compute + copy), now map the buffer
+            _gpuWorkDone = false;
+            WGPUBufferMapCallbackInfo cbInfo = {};
+            cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+            cbInfo.callback = [](WGPUMapAsyncStatus s, WGPUStringView, void* ud1, void* ud2) {
+                auto* self = static_cast<VncServer*>(ud1);
+                self->_mapStatus = s;
+                self->_gpuWorkDone = true;
+                // Wake up main thread via EventQueue (thread-safe)
+                self->_eventQueue->push(base::Event::screenUpdateEvent());
+            };
+            cbInfo.userdata1 = this;
+            wgpuBufferMapAsync(_dirtyFlagsReadback, WGPUMapMode_Read, 0,
+                _tilesX * _tilesY * sizeof(uint32_t), cbInfo);
+
+            _captureState = CaptureState::WAITING_MAP;
+            return Ok();
+        }
+
+        case CaptureState::WAITING_MAP: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting
+            }
+
+            if (_mapStatus != WGPUMapAsyncStatus_Success) {
+                ywarn("VNC dirty flags map failed");
+                _captureState = CaptureState::IDLE;
+                return Ok();
+            }
+
+            // Read dirty flags
+            const uint32_t* flags = static_cast<const uint32_t*>(
+                wgpuBufferGetConstMappedRange(_dirtyFlagsReadback, 0, _tilesX * _tilesY * sizeof(uint32_t)));
+
+            uint16_t dirtyCount = 0;
+            uint16_t lastRowStart = (_tilesY - 1) * _tilesX;
+            bool bottomDirty = false;
+            std::string dirtyIndices;
+            for (uint32_t i = 0; i < _tilesX * _tilesY; i++) {
+                _dirtyTiles[i] = (flags[i] != 0);
+                if (flags[i] != 0) {
+                    dirtyCount++;
+                    if (i >= lastRowStart) bottomDirty = true;
+                    uint16_t tx = i % _tilesX;
+                    uint16_t ty = i / _tilesX;
+                    if (dirtyIndices.size() < 200) {
+                        dirtyIndices += "(" + std::to_string(tx) + "," + std::to_string(ty) + ") ";
+                    }
+                }
+            }
+            wgpuBufferUnmap(_dirtyFlagsReadback);
+            ydebug("VNC WAITING_MAP: dirtyCount={} bottomDirty={} tilesY={} lastRowStart={} tiles={}",
+                   dirtyCount, bottomDirty, _tilesY, lastRowStart, dirtyIndices);
+
+            _captureState = CaptureState::READY_TO_SEND;
+            // Fall through to send
+            [[fallthrough]];
+        }
+
+        case CaptureState::READY_TO_SEND:
+            ydebug("VNC READY_TO_SEND: _cpuPixels={} _gpuReadbackPixels.empty()={}",
+                   (void*)_cpuPixels, _gpuReadbackPixels.empty());
+            // Need to read back from GPU if no CPU pixels
+            if (!_cpuPixels && !_gpuReadbackPixels.empty()) {
+                uint32_t bytesPerPixel = 4;
+                uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+                uint32_t bufSize = alignedBytesPerRow * height;
+
+                // Create or recreate temp readback buffer if size changed
+                if (!_tileReadbackBuffer || _tileReadbackBufferSize != bufSize) {
+                    if (_tileReadbackBuffer) {
+                        wgpuBufferRelease(_tileReadbackBuffer);
+                    }
+                    WGPUBufferDescriptor bufDesc = {};
+                    bufDesc.size = bufSize;
+                    bufDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+                    _tileReadbackBuffer = wgpuDeviceCreateBuffer(_device, &bufDesc);
+                    _tileReadbackBufferSize = bufSize;
+                }
+
+                // Copy texture to buffer - use _pendingTexture which was saved when we started
+                // processing this frame, NOT the texture parameter which may have new content
+                WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(_device, nullptr);
+                WGPUTexelCopyTextureInfo src = {};
+                src.texture = _pendingTexture ? _pendingTexture : texture;
+                WGPUTexelCopyBufferInfo dst = {};
+                dst.buffer = _tileReadbackBuffer;
+                dst.layout.bytesPerRow = alignedBytesPerRow;
+                dst.layout.rowsPerImage = height;
+                WGPUExtent3D copySize = {width, height, 1};
+                wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
+                WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, nullptr);
+                wgpuQueueSubmit(_queue, 1, &cmd);
+                wgpuCommandBufferRelease(cmd);
+                wgpuCommandEncoderRelease(encoder);
+
+                // Start async map - NO BUSY WAIT!
+                _gpuWorkDone = false;
+                WGPUBufferMapCallbackInfo cbInfo = {};
+                cbInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+                cbInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* ud1, void*) {
+                    auto* self = static_cast<VncServer*>(ud1);
+                    self->_mapStatus = status;
+                    self->_gpuWorkDone = true;
+                    // Wake up main thread via EventQueue (thread-safe)
+                    self->_eventQueue->push(base::Event::screenUpdateEvent());
+                };
+                cbInfo.userdata1 = this;
+                wgpuBufferMapAsync(_tileReadbackBuffer, WGPUMapMode_Read, 0, bufSize, cbInfo);
+
+                _captureState = CaptureState::WAITING_TILE_READBACK;
+                ydebug("VNC READY_TO_SEND: started pixel readback, returning");
+                return Ok();  // Return immediately, don't block!
+            }
+            // No GPU readback needed, continue to send
+            ydebug("VNC READY_TO_SEND: no readback needed, breaking to encode");
+            _captureState = CaptureState::IDLE;
+            break;
+
+        case CaptureState::WAITING_TILE_READBACK: {
+            if (!_gpuWorkDone) {
+                return Ok();  // Still waiting, return without blocking
+            }
+
+            if (_mapStatus != WGPUMapAsyncStatus_Success) {
+                ywarn("VNC tile readback map failed");
+                _captureState = CaptureState::IDLE;
+                return Ok();
+            }
+
+            // Copy mapped data to CPU buffer
+            uint32_t bytesPerPixel = 4;
+            uint32_t alignedBytesPerRow = (width * bytesPerPixel + 255) & ~255;
+            uint32_t bufSize = alignedBytesPerRow * height;
+
+            const uint8_t* mapped = static_cast<const uint8_t*>(
+                wgpuBufferGetConstMappedRange(_tileReadbackBuffer, 0, bufSize));
+            uint32_t unalignedRow = width * bytesPerPixel;
+            for (uint32_t y = 0; y < height; y++) {
+                std::memcpy(_gpuReadbackPixels.data() + y * unalignedRow,
+                           mapped + y * alignedBytesPerRow, unalignedRow);
+            }
+            wgpuBufferUnmap(_tileReadbackBuffer);
+
+            _captureState = CaptureState::IDLE;
+            ydebug("VNC WAITING_TILE_READBACK: readback complete, breaking to encode");
+            break;
+        }
+    }
+
+    ydebug("VNC sendFrame: REACHED ENCODING CODE, state={}", static_cast<int>(_captureState));
+
+    // Count dirty tiles
+    uint16_t numDirty = 0;
+    for (size_t i = 0; i < _dirtyTiles.size(); i++) {
+        if (_dirtyTiles[i]) numDirty++;
+    }
+
+    ydebug("VNC sendFrame: numDirty={}/{} tilesX={} tilesY={}", numDirty, _tilesX * _tilesY, _tilesX, _tilesY);
+
+    if (numDirty == 0) return Ok();
+
+    // Flow control: set awaiting ack BEFORE sending, to prevent race condition
+    // where isReadyForFrame() returns true between state=IDLE and _awaitingAck=true
+    _awaitingAck = true;
+
+    // Build frame data
+    std::vector<uint8_t> frameData;
+    frameData.reserve(64 * 1024);
+
+    uint16_t totalTiles = _tilesX * _tilesY;
+    // Use full-frame encoding when > 50% tiles dirty, but not if raw encoding is forced
+    bool useFullFrame = !_forceRaw && (numDirty > totalTiles / 2);
+
+    // H.264 encoding path
+#if YETTY_HAS_YVIDEO
+    if (_useH264 && useFullFrame) {
+        _stats.fullUpdates++;
+
+        const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+        if (!pixels) {
+            return Err<void>("No pixels for H.264 encoding");
+        }
+
+        // H.264 requires even dimensions - round down
+        uint32_t encWidth = width & ~1u;
+        uint32_t encHeight = height & ~1u;
+
+        // Initialize encoder on first frame or resolution change
+        if (!_h264Encoder || _h264Encoder->config().width != encWidth || _h264Encoder->config().height != encHeight) {
+            yvideo::EncoderConfig cfg;
+            cfg.width = encWidth;
+            cfg.height = encHeight;
+            cfg.bitrate = 4000000;  // 4 Mbps for good quality screen content
+            cfg.frameRate = 30.0f;
+            cfg.idrInterval = 60;   // IDR every 2 seconds
+            cfg.screenContent = true;
+
+            auto encoderRes = yvideo::Encoder::createH264(cfg);
+            if (!encoderRes) {
+                ywarn("VNC: Failed to create H.264 encoder, falling back to JPEG");
+                _useH264 = false;
+                // Fall through to JPEG path below
+                goto jpeg_fallback;
+            }
+            _h264Encoder = *encoderRes;
+
+            // Allocate YUV buffer (using even dimensions)
+            _yuvYStride = (encWidth + 15) & ~15;  // Align to 16 bytes
+            _yuvUVStride = (_yuvYStride / 2 + 15) & ~15;
+            uint32_t yPlaneSize = _yuvYStride * encHeight;
+            uint32_t uvPlaneSize = _yuvUVStride * (encHeight / 2);
+            _yuvBuffer.resize(yPlaneSize + uvPlaneSize * 2);
+
+            yinfo("VNC: H.264 encoder created {}x{} (source {}x{}), YUV buffer {}KB",
+                  encWidth, encHeight, width, height, _yuvBuffer.size() / 1024);
+        }
+
+        // Convert BGRA to YUV420 (use encWidth/encHeight for even dimensions)
+        uint32_t yPlaneSize = _yuvYStride * encHeight;
+        uint32_t uvPlaneSize = _yuvUVStride * (encHeight / 2);
+        uint8_t* yPlane = _yuvBuffer.data();
+        uint8_t* uPlane = _yuvBuffer.data() + yPlaneSize;
+        uint8_t* vPlane = _yuvBuffer.data() + yPlaneSize + uvPlaneSize;
+
+        convertBgraToYuv420Cpu(pixels, encWidth, encHeight, width * 4,
+                               yPlane, uPlane, vPlane,
+                               _yuvYStride, _yuvUVStride);
+
+        // Encode to H.264
+        auto encodeRes = _h264Encoder->encode(yPlane, uPlane, vPlane, _yuvYStride, _yuvUVStride);
+        if (!encodeRes) {
+            ywarn("VNC: H.264 encode failed: {}", encodeRes.error().message());
+            _useH264 = false;
+            goto jpeg_fallback;
+        }
+
+        const auto& encoded = *encodeRes;
+        if (encoded.data.empty()) {
+            // Frame was skipped by rate control
+            _awaitingAck = false;
+            return Ok();
+        }
+
+        // Build H.264 frame packet (use encoded dimensions, may be 1px less)
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = encWidth;
+        fh.height = encHeight;
+        fh.tile_size = TILE_SIZE;  // Non-zero to use tile path (not rectangle mode)
+        fh.num_tiles = 1;
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        TileHeader th;
+        th.tile_x = 0;
+        th.tile_y = 0;
+        th.encoding = static_cast<uint8_t>(Encoding::H264);
+        th.data_size = sizeof(VideoFrameHeader) + encoded.data.size();
+
+        frameData.insert(frameData.end(),
+                        reinterpret_cast<uint8_t*>(&th),
+                        reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+
+        VideoFrameHeader vh;
+        vh.frameType = encoded.isIDR ? 0 : 1;
+        vh.reserved[0] = vh.reserved[1] = vh.reserved[2] = 0;
+        vh.timestamp = static_cast<uint32_t>(encoded.timestamp / 1000);  // us to ms
+        vh.dataSize = encoded.data.size();
+
+        frameData.insert(frameData.end(),
+                        reinterpret_cast<uint8_t*>(&vh),
+                        reinterpret_cast<uint8_t*>(&vh) + sizeof(vh));
+        frameData.insert(frameData.end(), encoded.data.begin(), encoded.data.end());
+
+        _stats.bytesJpeg += encoded.data.size();  // Reuse stats for now
+
+        ydebug("VNC sendFrame: H264 {} bytes, IDR={}", encoded.data.size(), encoded.isIDR);
+    } else
+#endif
+    if (useFullFrame) {
+jpeg_fallback:
+        // FULL FRAME: encode entire frame as one JPEG
+        _stats.fullUpdates++;
+
+        const uint8_t* pixels = _cpuPixels ? _cpuPixels : _gpuReadbackPixels.data();
+        if (!pixels) {
+            return Err<void>("No pixels for full frame encoding");
+        }
+
+        unsigned char* jpegBuf = nullptr;
+        unsigned long jpegSize = 0;
+        int result = tjCompress2(
+            static_cast<tjhandle>(_jpegCompressor),
+            const_cast<unsigned char*>(pixels),
+            width, 0, height,
+            TJPF_BGRA,
+            &jpegBuf, &jpegSize,
+            TJSAMP_420, _jpegQuality,
+            TJFLAG_FASTDCT
+        );
+
+        if (result != 0) {
+            if (jpegBuf) tjFree(jpegBuf);
+            return Err<void>("Full frame JPEG compression failed");
+        }
+
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = width;
+        fh.height = height;
+        fh.tile_size = TILE_SIZE;
+        fh.num_tiles = 1;
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        TileHeader th;
+        th.tile_x = 0;
+        th.tile_y = 0;
+        th.encoding = static_cast<uint8_t>(Encoding::FULL_FRAME);
+        th.data_size = jpegSize;
+
+        frameData.insert(frameData.end(),
+                        reinterpret_cast<uint8_t*>(&th),
+                        reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+        frameData.insert(frameData.end(), jpegBuf, jpegBuf + jpegSize);
+
+        _stats.bytesJpeg += jpegSize;
+        tjFree(jpegBuf);
+
+        ydebug("VNC sendFrame: FULL_FRAME {} bytes", jpegSize);
+    } else if (_mergeRectangles) {
+        // RECTANGLE MODE: merge dirty tiles into larger rectangles
+        auto rects = mergeRectangles();
+
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = width;
+        fh.height = height;
+        fh.tile_size = 0;  // Indicates rectangle mode
+        fh.num_tiles = static_cast<uint16_t>(rects.size());
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        for (const auto& r : rects) {
+            std::vector<uint8_t> rectData;
+            Encoding enc;
+            if (auto res = encodeRect(r.x, r.y, r.w, r.h, rectData, enc); !res) continue;
+
+            _stats.tilesSent++;
+            if (enc == Encoding::RECT_JPEG) {
+                _stats.tilesJpeg++;
+                _stats.bytesJpeg += rectData.size();
+            } else {
+                _stats.tilesRaw++;
+                _stats.bytesRaw += rectData.size();
+            }
+
+            RectHeader rh;
+            rh.px_x = r.x;
+            rh.px_y = r.y;
+            rh.width = r.w;
+            rh.height = r.h;
+            rh.encoding = static_cast<uint8_t>(enc);
+            rh.reserved = 0;
+            rh.data_size = rectData.size();
+
+            frameData.insert(frameData.end(),
+                            reinterpret_cast<uint8_t*>(&rh),
+                            reinterpret_cast<uint8_t*>(&rh) + sizeof(rh));
+            frameData.insert(frameData.end(), rectData.begin(), rectData.end());
+        }
+
+        ydebug("VNC sendFrame: {} rectangles (from {} dirty tiles)", rects.size(), numDirty);
+    } else {
+        // TILE MODE: encode individual dirty tiles
+        FrameHeader fh;
+        fh.magic = FRAME_MAGIC;
+        fh.width = width;
+        fh.height = height;
+        fh.tile_size = TILE_SIZE;
+        fh.num_tiles = numDirty;
+
+        frameData.insert(frameData.end(),
+                         reinterpret_cast<uint8_t*>(&fh),
+                         reinterpret_cast<uint8_t*>(&fh) + sizeof(fh));
+
+        // Encode dirty tiles from CPU framebuffer
+        for (uint16_t ty = 0; ty < _tilesY; ty++) {
+            for (uint16_t tx = 0; tx < _tilesX; tx++) {
+                if (!_dirtyTiles[ty * _tilesX + tx]) continue;
+
+                std::vector<uint8_t> tileData;
+                Encoding enc;
+                if (auto res = encodeTile(tx, ty, tileData, enc); !res) continue;
+
+                _stats.tilesSent++;
+                if (enc == Encoding::JPEG) {
+                    _stats.tilesJpeg++;
+                    _stats.bytesJpeg += tileData.size();
+                } else {
+                    _stats.tilesRaw++;
+                    _stats.bytesRaw += tileData.size();
+                }
+
+                TileHeader th;
+                th.tile_x = tx;
+                th.tile_y = ty;
+                th.encoding = static_cast<uint8_t>(enc);
+                th.data_size = tileData.size();
+
+                frameData.insert(frameData.end(),
+                                reinterpret_cast<uint8_t*>(&th),
+                                reinterpret_cast<uint8_t*>(&th) + sizeof(th));
+                frameData.insert(frameData.end(), tileData.begin(), tileData.end());
+            }
+        }
+    }
+
+    // Send to all clients
+    {
+        ytimeit("vnc-send");
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        std::vector<int> deadClients;
+
+        for (int fd : _clients) {
+            if (auto res = sendToClient(fd, frameData.data(), frameData.size()); !res) {
+                deadClients.push_back(fd);
+            }
+        }
+
+        // Remove dead clients
+        for (int fd : deadClients) {
+            unregisterClientPoll(fd);
+            sock::close(fd);
+            _clients.erase(std::remove(_clients.begin(), _clients.end(), fd), _clients.end());
+            _clientInputBuffers.erase(fd);
+            _clientSendBuffers.erase(fd);
+            ydebug("VNC client disconnected");
+        }
+        _clientCount = _clients.size();
+    }
+
+    // Track frame stats
+    _stats.bytesSent += frameData.size();
+    _stats.frames++;
+
+    // Report stats every second
+    auto now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - _stats.lastReportTime >= 1.0) {
+        double elapsed = now - _stats.lastReportTime;
+        if (_stats.lastReportTime > 0 && _stats.frames > 0) {
+            uint32_t avgTileSize = _stats.tilesSent > 0
+                ? static_cast<uint32_t>((_stats.bytesJpeg + _stats.bytesRaw) / _stats.tilesSent)
+                : 0;
+            // Save to public stats
+            _lastStats.tilesSent = _stats.tilesSent;
+            _lastStats.tilesJpeg = _stats.tilesJpeg;
+            _lastStats.tilesRaw = _stats.tilesRaw;
+            _lastStats.avgTileSize = avgTileSize;
+            _lastStats.fullUpdates = _stats.fullUpdates;
+            _lastStats.frames = _stats.frames;
+            _lastStats.bytesPerSec = static_cast<uint64_t>(_stats.bytesSent / elapsed);
+        }
+        // Reset stats
+        _stats = Stats{};
+        _stats.lastReportTime = now;
+    }
+
+    // Note: _awaitingAck was set to true earlier (before encoding) to prevent
+    // race condition where isReadyForFrame() returns true during encoding
+
+    return Ok();
+}
+
+void VncServer::pollClientInput(int clientFd) {
+    auto it = _clientInputBuffers.find(clientFd);
+    if (it == _clientInputBuffers.end()) {
+        ydebug("VNC pollClientInput: no buffer for fd={}", clientFd);
+        return;
+    }
+
+    ClientInputBuffer& buf = it->second;
+
+    // Non-blocking read
+    while (true) {
+        size_t toRead = buf.needed - buf.buffer.size();
+        if (toRead == 0) break;
+
+        uint8_t tmp[256];
+        ssize_t n = sock::recv(clientFd, tmp, std::min(toRead, sizeof(tmp)), MSG_DONTWAIT);
+        if (n <= 0) {
+            if (n == 0) {
+                // Client disconnected - clean up
+                ydebug("VNC pollClientInput: fd={} disconnected, cleaning up", clientFd);
+                std::lock_guard<std::mutex> lock(_clientsMutex);
+                unregisterClientPoll(clientFd);
+                sock::close(clientFd);
+                _clients.erase(std::remove(_clients.begin(), _clients.end(), clientFd), _clients.end());
+                _clientInputBuffers.erase(clientFd);
+                _clientSendBuffers.erase(clientFd);
+                _clientCount = _clients.size();
+                return;  // Stop processing this client
+            } else if (!sock::would_block()) {
+                ydebug("VNC pollClientInput: fd={} recv error: {}", clientFd, sock::last_error_string());
+            }
+            break;  // No more data available
+        }
+
+        ydebug("VNC pollClientInput: fd={} received {} bytes", clientFd, n);
+        buf.buffer.insert(buf.buffer.end(), tmp, tmp + n);
+
+        // Check if we have enough data
+        if (buf.buffer.size() >= buf.needed) {
+            if (buf.readingHeader) {
+                // Parse header
+                std::memcpy(&buf.header, buf.buffer.data(), sizeof(InputHeader));
+                ydebug("VNC pollClientInput: parsed header type={} data_size={}", buf.header.type, buf.header.data_size);
+                buf.buffer.clear();
+                buf.needed = buf.header.data_size;
+                buf.readingHeader = false;
+
+                if (buf.needed == 0) {
+                    // No data, dispatch immediately
+                    ydebug("VNC pollClientInput: dispatching event with no data");
+                    dispatchInput(buf.header, nullptr);
+                    buf.needed = sizeof(InputHeader);
+                    buf.readingHeader = true;
+                }
+            } else {
+                // Dispatch event
+                ydebug("VNC pollClientInput: dispatching event with {} bytes data", buf.buffer.size());
+                dispatchInput(buf.header, buf.buffer.data());
+                buf.buffer.clear();
+                buf.needed = sizeof(InputHeader);
+                buf.readingHeader = true;
+            }
+        }
+    }
+}
+
+void VncServer::dispatchInput(const InputHeader& hdr, const uint8_t* data) {
+    ydebug("VNC dispatchInput: type={} size={} data={}", hdr.type, hdr.data_size, (void*)data);
+    switch (static_cast<InputType>(hdr.type)) {
+        case InputType::MOUSE_MOVE:
+            ydebug("VNC dispatchInput: MOUSE_MOVE callback={}", (bool)onMouseMove);
+            if (data && hdr.data_size >= sizeof(MouseMoveEvent) && onMouseMove) {
+                const MouseMoveEvent* m = reinterpret_cast<const MouseMoveEvent*>(data);
+                ydebug("VNC dispatchInput: calling onMouseMove x={} y={} mods={}", m->x, m->y, m->mods);
+                onMouseMove(m->x, m->y, m->mods);
+            }
+            break;
+
+        case InputType::MOUSE_BUTTON:
+            ydebug("VNC dispatchInput: MOUSE_BUTTON callback={}", (bool)onMouseButton);
+            if (data && hdr.data_size >= sizeof(MouseButtonEvent) && onMouseButton) {
+                const MouseButtonEvent* m = reinterpret_cast<const MouseButtonEvent*>(data);
+                ydebug("VNC dispatchInput: calling onMouseButton x={} y={} btn={} pressed={} mods={}", m->x, m->y, m->button, m->pressed, m->mods);
+                onMouseButton(m->x, m->y, static_cast<MouseButton>(m->button), m->pressed != 0, m->mods);
+            }
+            break;
+
+        case InputType::MOUSE_SCROLL:
+            ydebug("VNC dispatchInput: MOUSE_SCROLL callback={}", (bool)onMouseScroll);
+            if (data && hdr.data_size >= sizeof(MouseScrollEvent) && onMouseScroll) {
+                const MouseScrollEvent* m = reinterpret_cast<const MouseScrollEvent*>(data);
+                ydebug("VNC dispatchInput: calling onMouseScroll x={} y={} dx={} dy={} mods={}", m->x, m->y, m->delta_x, m->delta_y, m->mods);
+                onMouseScroll(m->x, m->y, m->delta_x, m->delta_y, m->mods);
+            }
+            break;
+
+        case InputType::KEY_DOWN:
+            ydebug("VNC dispatchInput: KEY_DOWN callback={}", (bool)onKeyDown);
+            if (data && hdr.data_size >= sizeof(KeyEvent) && onKeyDown) {
+                const KeyEvent* k = reinterpret_cast<const KeyEvent*>(data);
+                ydebug("VNC dispatchInput: calling onKeyDown keycode={} scancode={} mods={}", k->keycode, k->scancode, k->mods);
+                onKeyDown(k->keycode, k->scancode, k->mods);
+            }
+            break;
+
+        case InputType::KEY_UP:
+            ydebug("VNC dispatchInput: KEY_UP callback={}", (bool)onKeyUp);
+            if (data && hdr.data_size >= sizeof(KeyEvent) && onKeyUp) {
+                const KeyEvent* k = reinterpret_cast<const KeyEvent*>(data);
+                ydebug("VNC dispatchInput: calling onKeyUp keycode={} scancode={} mods={}", k->keycode, k->scancode, k->mods);
+                onKeyUp(k->keycode, k->scancode, k->mods);
+            }
+            break;
+
+        case InputType::TEXT_INPUT:
+            if (data && hdr.data_size > 0 && onTextInput) {
+                std::string text(reinterpret_cast<const char*>(data), hdr.data_size);
+                auto t = std::chrono::high_resolution_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+                ydebug("[TIME] TEXT_INPUT at {}ms: '{}'", ms, text);
+                onTextInput(text);
+            }
+            break;
+
+        case InputType::RESIZE:
+            ydebug("VNC dispatchInput: RESIZE callback={}", (bool)onResize);
+            if (data && hdr.data_size >= sizeof(ResizeEvent) && onResize) {
+                const ResizeEvent* r = reinterpret_cast<const ResizeEvent*>(data);
+                ydebug("VNC dispatchInput: calling onResize {}x{}", r->width, r->height);
+                onResize(r->width, r->height);
+            }
+            break;
+
+        case InputType::CELL_SIZE:
+            ydebug("VNC dispatchInput: CELL_SIZE callback={}", (bool)onCellSize);
+            if (data && hdr.data_size >= sizeof(CellSizeEvent) && onCellSize) {
+                const CellSizeEvent* c = reinterpret_cast<const CellSizeEvent*>(data);
+                ydebug("VNC dispatchInput: calling onCellSize cellHeight={}", c->cellHeight);
+                onCellSize(c->cellHeight);
+            }
+            break;
+
+        case InputType::CHAR_WITH_MODS:
+            ydebug("VNC dispatchInput: CHAR_WITH_MODS callback={}", (bool)onCharWithMods);
+            if (data && hdr.data_size >= sizeof(CharWithModsEvent) && onCharWithMods) {
+                const CharWithModsEvent* c = reinterpret_cast<const CharWithModsEvent*>(data);
+                ydebug("VNC dispatchInput: calling onCharWithMods codepoint={} mods={}", c->codepoint, c->mods);
+                onCharWithMods(c->codepoint, c->mods);
+            }
+            break;
+
+        case InputType::FRAME_ACK:
+            // Flow control: client finished processing frame, allow next frame
+            ydebug("VNC FRAME_ACK received, clearing _awaitingAck");
+            _awaitingAck = false;
+            break;
+
+        case InputType::COMPRESSION_CONFIG:
+            if (data && hdr.data_size >= sizeof(CompressionConfigEvent)) {
+                const CompressionConfigEvent* c = reinterpret_cast<const CompressionConfigEvent*>(data);
+                _forceRaw = (c->forceRaw != 0);
+                if (c->quality > 0 && c->quality <= 100) {
+                    _jpegQuality = c->quality;
+                }
+                _alwaysFullFrame = (c->alwaysFull != 0);
+                // Handle codec selection
+                if (c->codec == CODEC_H264) {
+                    setUseH264(true);
+                } else {
+                    setUseH264(false);
+                }
+                ydebug("VNC COMPRESSION_CONFIG: forceRaw={} quality={} alwaysFull={} codec={}",
+                       _forceRaw, _jpegQuality, _alwaysFullFrame, c->codec);
+            }
+            break;
+    }
+
+    // Notify that input was received (triggers screen refresh)
+    if (onInputReceived) {
+        auto t = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        ydebug("[TIME] Calling onInputReceived at {}ms", ms);
+        onInputReceived();
+    } else {
+        ywarn("[TIME] onInputReceived callback is NULL!");
+    }
+}
+
+bool VncServer::hasPendingInput() const {
+    return false;  // Input is processed immediately now
+}
+
+bool VncServer::isReadyForFrame() const {
+    // Ready when: state machine is idle AND not waiting for client ack
+    // Note: _gpuWorkDone being true is not sufficient - state machine must complete
+    return _captureState == CaptureState::IDLE && !_awaitingAck.load();
+}
+
+void VncServer::processInput() {
+    // Poll all clients for input (non-blocking)
+    std::lock_guard<std::mutex> lock(_clientsMutex);
+    static int callCount = 0;
+    if (++callCount % 100 == 1) {
+        ydebug("VNC processInput: {} clients", _clients.size());
+    }
+    for (int fd : _clients) {
+        pollClientInput(fd);
+    }
+}
+
+VncServer::FrameStats VncServer::getStats() const {
+    return _lastStats;
+}
+
+Result<void> VncServer::registerClientPoll(int clientFd) {
+    auto loopResult = base::EventLoop::instance();
+    if (!loopResult) {
+        return Err<void>("EventLoop not available");
+    }
+    auto loop = *loopResult;
+
+    auto pollResult = loop->createPoll();
+    if (!pollResult) {
+        return Err<void>("Failed to create poll", pollResult);
+    }
+    int pollId = *pollResult;
+
+    if (auto res = loop->configPoll(pollId, clientFd); !res) {
+        loop->destroyPoll(pollId);
+        return Err<void>("Failed to configure poll", res);
+    }
+
+    if (auto res = loop->registerPollListener(pollId, sharedAs<base::EventListener>()); !res) {
+        loop->destroyPoll(pollId);
+        return Err<void>("Failed to register poll listener", res);
+    }
+
+    if (auto res = loop->startPoll(pollId); !res) {
+        loop->destroyPoll(pollId);
+        return Err<void>("Failed to start poll", res);
+    }
+
+    _clientPollIds[clientFd] = pollId;
+    _pollIdToFd[pollId] = clientFd;
+    ydebug("VNC: registered async poll for client fd={} pollId={}", clientFd, pollId);
+    return Ok();
+}
+
+void VncServer::unregisterClientPoll(int clientFd) {
+    auto it = _clientPollIds.find(clientFd);
+    if (it == _clientPollIds.end()) {
+        return;
+    }
+    int pollId = it->second;
+
+    auto loopResult = base::EventLoop::instance();
+    if (loopResult) {
+        auto loop = *loopResult;
+        loop->stopPoll(pollId);
+        loop->destroyPoll(pollId);
+    }
+
+    _pollIdToFd.erase(pollId);
+    _clientPollIds.erase(it);
+    ydebug("VNC: unregistered async poll for client fd={}", clientFd);
+}
+
+Result<bool> VncServer::onEvent(const base::Event& event) {
+    ydebug("VNC SERVER onEvent: type={} clientCount={}", static_cast<int>(event.type), _clientCount.load());
+
+    int fd = event.poll.fd;
+
+    // Server socket - accept new connections (readable only)
+    if (fd == _serverFd && event.type == base::Event::Type::PollReadable) {
+        ydebug("VNC onEvent: accepting new connection");
+        handleAccept();
+        return Ok(true);
+    }
+
+    // Client socket - check if it's one of ours
+    {
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        auto it = std::find(_clients.begin(), _clients.end(), fd);
+        if (it == _clients.end()) {
+            return Ok(false);
+        }
+    }
+
+    // Handle writable - drain send queue
+    if (event.type == base::Event::Type::PollWritable) {
+        drainClientSendQueue(fd);
+        return Ok(true);
+    }
+
+    // Handle readable - process input
+    if (event.type == base::Event::Type::PollReadable) {
+        pollClientInput(fd);
+        return Ok(true);
+    }
+
+    return Ok(false);
+}
+
+void VncServer::setUseH264(bool enable) {
+#if YETTY_HAS_YVIDEO
+    if (enable == _useH264) return;
+
+    _useH264 = enable;
+
+    if (enable && !_h264Encoder) {
+        yinfo("VNC: H.264 encoding enabled (encoder will be created on first frame)");
+    } else if (!enable) {
+        _h264Encoder.reset();
+        _yuvBuffer.clear();
+        yinfo("VNC: H.264 encoding disabled, using JPEG");
+    }
+#else
+    (void)enable;
+    ywarn("VNC: H.264 not available (yvideo not built)");
+#endif
+}
+
+} // namespace yetty::vnc

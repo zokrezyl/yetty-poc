@@ -1,0 +1,96 @@
+# YDraw Combined Demo - Text and SDF primitives
+background: "#1a1a2e"
+
+body:
+  # Title
+  - text:
+      position: [150, 30]
+      content: "YDraw: Text + SDF"
+      font-size: 28
+      color: "#ecf0f1"
+
+  # Row 1: Shapes with labels
+  - circle:
+      position: [80, 100]
+      radius: 30
+      fill: "#e74c3c"
+      stroke: "#c0392b"
+      stroke-width: 2
+
+  - text:
+      position: [55, 145]
+      content: "Circle"
+      font-size: 14
+      color: "#bdc3c7"
+
+  - box:
+      position: [200, 100]
+      size: [50, 40]
+      fill: "#3498db"
+      stroke: "#2980b9"
+      stroke-width: 2
+      round: 8
+
+  - text:
+      position: [180, 145]
+      content: "Box"
+      font-size: 14
+      color: "#bdc3c7"
+
+  - triangle:
+      p0: [320, 70]
+      p1: [350, 130]
+      p2: [290, 130]
+      fill: "#2ecc71"
+      stroke: "#27ae60"
+      stroke-width: 2
+
+  - text:
+      position: [290, 145]
+      content: "Triangle"
+      font-size: 14
+      color: "#bdc3c7"
+
+  # Row 2: More shapes
+  - ellipse:
+      position: [80, 220]
+      radii: [35, 20]
+      fill: "#9b59b6"
+
+  - text:
+      position: [55, 260]
+      content: "Ellipse"
+      font-size: 14
+      color: "#bdc3c7"
+
+  - segment:
+      from: [150, 200]
+      to: [250, 240]
+      stroke: "#f39c12"
+      stroke-width: 4
+
+  - text:
+      position: [180, 260]
+      content: "Line"
+      font-size: 14
+      color: "#bdc3c7"
+
+  - bezier:
+      p0: [280, 240]
+      p1: [320, 180]
+      p2: [360, 240]
+      stroke: "#1abc9c"
+      stroke-width: 3
+
+  - text:
+      position: [295, 260]
+      content: "Bezier"
+      font-size: 14
+      color: "#bdc3c7"
+
+  # Footer
+  - text:
+      position: [100, 320]
+      content: "GPU-accelerated SDF + MSDF text rendering"
+      font-size: 16
+      color: "#7f8c8d"

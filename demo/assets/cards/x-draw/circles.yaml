@@ -1,0 +1,34 @@
+background: "#1a1a2e"
+
+body:
+  # Red circle - fully opaque
+  - circle:
+      position: [100, 100]
+      radius: 40
+      fill: "#ff0000"
+
+  # Green circle - with stroke  
+  - circle:
+      position: [200, 100]
+      radius: 40
+      fill: "#00ff00"
+      stroke: "#ffffff"
+      stroke-width: 3
+
+  # Blue circle
+  - circle:
+      position: [300, 100]
+      radius: 40
+      fill: "#0000ff"
+
+  # Yellow circle
+  - circle:
+      position: [150, 180]
+      radius: 30
+      fill: "#ffff00"
+
+  # Cyan circle
+  - circle:
+      position: [250, 180]
+      radius: 30
+      fill: "#00ffff"

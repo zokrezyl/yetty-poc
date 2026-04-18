@@ -1,0 +1,63 @@
+background: "#1a1a2e"
+
+body:
+  # Polygon with a square hole (letter O shape)
+  - polygon_group:
+      contours:
+        # Outer boundary (clockwise)
+        - [[100, 50], [200, 50], [200, 150], [100, 150]]
+        # Inner hole (counter-clockwise)
+        - [[130, 80], [130, 120], [170, 120], [170, 80]]
+      fill: "#e74c3c"
+      stroke: "#c0392b"
+      stroke-width: 2
+
+  # Hexagon with triangular hole
+  - polygon_group:
+      contours:
+        # Outer hexagon
+        - [[320, 60], [370, 90], [370, 140], [320, 170], [270, 140], [270, 90]]
+        # Inner triangle hole
+        - [[320, 90], [295, 130], [345, 130]]
+      fill: "#3498db"
+      stroke: "#2980b9"
+      stroke-width: 2
+
+  # Pentagon with pentagon hole (ring shape)
+  - polygon_group:
+      contours:
+        # Outer pentagon
+        - [[480, 50], [530, 100], [510, 160], [450, 160], [430, 100]]
+        # Inner pentagon (smaller, centered)
+        - [[480, 80], [505, 105], [495, 140], [465, 140], [455, 105]]
+      fill: "#f1c40f"
+      stroke: "#d4ac0d"
+      stroke-width: 2
+
+  # Polygon with multiple holes
+  - polygon_group:
+      contours:
+        # Outer rectangle
+        - [[80, 200], [280, 200], [280, 300], [80, 300]]
+        # Hole 1
+        - [[100, 220], [100, 260], [140, 260], [140, 220]]
+        # Hole 2
+        - [[160, 220], [160, 260], [200, 260], [200, 220]]
+        # Hole 3
+        - [[220, 220], [220, 260], [260, 260], [260, 220]]
+      fill: "#2ecc71"
+      stroke: "#27ae60"
+      stroke-width: 2
+
+  # Ring with multiple holes (cheese shape)
+  - polygon_group:
+      contours:
+        # Outer irregular shape
+        - [[350, 200], [450, 210], [480, 260], [420, 310], [340, 290], [310, 240]]
+        # Hole 1 (small circle approx)
+        - [[370, 230], [380, 240], [375, 255], [360, 250], [355, 235]]
+        # Hole 2
+        - [[420, 250], [435, 255], [430, 275], [415, 275], [410, 260]]
+      fill: "#9b59b6"
+      stroke: "#8e44ad"
+      stroke-width: 2

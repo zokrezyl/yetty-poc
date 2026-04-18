@@ -1,0 +1,22 @@
+# Codacy configuration
+# https://docs.codacy.com/repositories-configure/codacy-configuration-file/
+
+---
+exclude_paths:
+  # Binary assets
+  - "assets/*.ttf"
+  - "assets/*.png"
+  - "docs/*.gif"
+  - "docs/*.jpeg"
+  - "docs/*.png"
+  - "docs/*.mp4"
+  - "demo/assets/**/*.bin"
+  - "demo/assets/**/*.pdf"
+  # Build tools
+  - "build-tools/android/gradle/wrapper/*.jar"
+  # Third-party dependencies (downloaded by CPM)
+  - "build-*/**"
+  - "sandbox/**"
+  # Generated files
+  - "**/*_generated.h"
+  - "**/*_generated.cpp"

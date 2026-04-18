@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <!-- Background gradient -->
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="sunGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f39c12"/>
+      <stop offset="100%" style="stop-color:#e74c3c"/>
+    </linearGradient>
+    <linearGradient id="waterGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3498db;stop-opacity:0.8"/>
+      <stop offset="100%" style="stop-color:#2980b9"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Sky background -->
+  <rect width="400" height="300" fill="url(#bgGrad)"/>
+  
+  <!-- Sun -->
+  <circle cx="320" cy="80" r="45" fill="url(#sunGrad)"/>
+  
+  <!-- Sun rays -->
+  <g stroke="#f39c12" stroke-width="2" opacity="0.6">
+    <line x1="320" y1="20" x2="320" y2="5"/>
+    <line x1="320" y1="140" x2="320" y2="155"/>
+    <line x1="260" y1="80" x2="245" y2="80"/>
+    <line x1="380" y1="80" x2="395" y2="80"/>
+    <line x1="277" y1="37" x2="267" y2="27"/>
+    <line x1="363" y1="123" x2="373" y2="133"/>
+    <line x1="277" y1="123" x2="267" y2="133"/>
+    <line x1="363" y1="37" x2="373" y2="27"/>
+  </g>
+  
+  <!-- Mountains -->
+  <polygon points="0,200 80,120 160,200" fill="#2c3e50"/>
+  <polygon points="60,200 160,100 260,200" fill="#34495e"/>
+  <polygon points="200,200 300,130 400,200" fill="#2c3e50"/>
+  
+  <!-- Water -->
+  <rect x="0" y="200" width="400" height="100" fill="url(#waterGrad)"/>
+  
+  <!-- Water ripples -->
+  <g stroke="#5dade2" stroke-width="1" fill="none" opacity="0.5">
+    <path d="M 0,220 Q 50,215 100,220 T 200,220 T 300,220 T 400,220"/>
+    <path d="M 0,240 Q 60,235 120,240 T 240,240 T 360,240"/>
+    <path d="M 0,260 Q 40,255 80,260 T 160,260 T 240,260 T 320,260 T 400,260"/>
+  </g>
+  
+  <!-- Stars -->
+  <g fill="#ffffff" opacity="0.8">
+    <circle cx="50" cy="40" r="1.5"/>
+    <circle cx="120" cy="60" r="1"/>
+    <circle cx="180" cy="30" r="1.5"/>
+    <circle cx="230" cy="55" r="1"/>
+    <circle cx="80" cy="90" r="1"/>
+    <circle cx="140" cy="80" r="1.2"/>
+  </g>
+  
+  <!-- Title text -->
+  <text x="200" y="280" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#ecf0f1">
+    ThorVG Demo - Sunset Scene
+  </text>
+</svg>

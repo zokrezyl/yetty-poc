@@ -1,0 +1,629 @@
+#include "pdf.h"
+#include <yetty/yetty-context.h>
+#include <yetty/platform/event-loop.h>
+#include <ytrace/ytrace.hpp>
+
+#include <fpdfview.h>
+#include <fpdf_edit.h>
+
+#include <sstream>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <mutex>
+
+// GLFW modifier constants
+constexpr int GLFW_MOD_CONTROL = 0x0002;
+
+namespace yetty::card {
+
+//=============================================================================
+// PDFium library init (once per process)
+//=============================================================================
+static std::once_flag s_pdfiumInitFlag;
+
+static void ensurePdfiumInit() {
+    std::call_once(s_pdfiumInitFlag, []() {
+        FPDF_LIBRARY_CONFIG config = {};
+        config.version = 2;
+        FPDF_InitLibraryWithConfig(&config);
+        ydebug("PDFium library initialized");
+    });
+}
+
+//=============================================================================
+// PdfImpl
+//=============================================================================
+
+class PdfImpl : public Pdf {
+public:
+    PdfImpl(const YettyContext& ctx,
+            int32_t x, int32_t y,
+            uint32_t widthCells, uint32_t heightCells,
+            const std::string& args, const std::string& payload)
+        : Pdf(ctx.cardManager, ctx.gpu, x, y, widthCells, heightCells)
+        , _ctx(ctx)
+        , _argsStr(args)
+        , _pdfData(payload.begin(), payload.end())
+    {
+        _shaderGlyph = SHADER_GLYPH;
+    }
+
+    ~PdfImpl() override {
+        dispose();
+    }
+
+    const char* typeName() const override { return "pdf"; }
+    uint32_t metadataSlotIndex() const override { return _metaHandle.offset / 64; }
+
+    void setCellSize(float cellWidth, float cellHeight) override {
+        if (_cellWidth != cellWidth || _cellHeight != cellHeight) {
+            _cellWidth = cellWidth;
+            _cellHeight = cellHeight;
+            _needsRender = true;
+            _metadataDirty = true;
+        }
+    }
+
+    //=========================================================================
+    // Card interface
+    //=========================================================================
+
+    Result<void> init() {
+        yerror("PDF::init: >>> ENTER  pdfData.size={} widthCells={} heightCells={} cellW={} cellH={}",
+               _pdfData.size(), _widthCells, _heightCells, _cellWidth, _cellHeight);
+
+        ensurePdfiumInit();
+        yerror("PDF::init: [1] ensurePdfiumInit done");
+
+        // Allocate metadata slot
+        auto metaResult = _cardMgr->allocateMetadata(sizeof(Metadata));
+        if (!metaResult) {
+            yerror("PDF::init: FAILED at allocateMetadata");
+            return Err<void>("Pdf::init: failed to allocate metadata");
+        }
+        _metaHandle = *metaResult;
+        yerror("PDF::init: [2] metadata allocated offset={} slotIndex={}", _metaHandle.offset, metadataSlotIndex());
+
+        // Parse args
+        parseArgs(_argsStr);
+        yerror("PDF::init: [3] args parsed, inputSource='{}'", _inputSource);
+
+        // Load PDF based on -i/--input argument
+        if (_inputSource == "-" || _inputSource.empty()) {
+            // Read from payload (base64-decoded data passed via OSC)
+            if (_pdfData.empty()) {
+                yerror("PDF::init: FAILED - empty payload (use -i - to read from payload)");
+                return Err<void>("Pdf::init: empty payload");
+            }
+            yerror("PDF::init: loading {} bytes from payload", _pdfData.size());
+            _doc = FPDF_LoadMemDocument(_pdfData.data(), static_cast<int>(_pdfData.size()), nullptr);
+        } else {
+            // Read from file path specified via -i <path>
+            yerror("PDF::init: loading from file path: {}", _inputSource);
+            _doc = FPDF_LoadDocument(_inputSource.c_str(), nullptr);
+        }
+        if (!_doc) {
+            unsigned long err = FPDF_GetLastError();
+            yerror("PDF::init: FAILED to load PDF error={} pdfData.size={}", err, _pdfData.size());
+            return Err<void>("Pdf::init: failed to load PDF (error " + std::to_string(err) + ")");
+        }
+
+        _pageCount = FPDF_GetPageCount(_doc);
+        yerror("PDF::init: [4] loaded PDF with {} pages", _pageCount);
+
+        if (_pageCount == 0) {
+            yerror("PDF::init: FAILED - zero pages");
+            return Err<void>("Pdf::init: PDF has no pages");
+        }
+
+        // First render + link + metadata upload will happen via the lifecycle:
+        //   setCellSize() sets _needsRender=true
+        //   allocateTextures() links pixels after renderCurrentPage()
+        //   createAtlas() packs atlas
+        //   render() uploads metadata
+        _needsRender = true;
+        _metadataDirty = true;
+
+        // Register for events
+        if (auto res = registerForEvents(); !res) {
+            yerror("PDF::init: FAILED at registerForEvents: {}", res.error().message());
+            return Err<void>("Pdf::init: failed to register for events", res);
+        }
+        yerror("PDF::init: [8] registerForEvents done - SUCCESS");
+
+        return Ok();
+    }
+
+    void suspend() override {
+        _needsUpload = true;
+        _metadataDirty = true;
+        ydebug("Pdf::suspend: deallocated texture handle, _pagePixels has {} bytes", _pagePixels.size());
+    }
+
+    Result<void> dispose() override {
+        // Deregister from events
+        deregisterFromEvents();
+
+        if (_metaHandle.isValid() && _cardMgr) {
+            _cardMgr->deallocateMetadata(_metaHandle);
+            _metaHandle = MetadataHandle::invalid();
+        }
+
+        // Close PDF document
+        if (_doc) {
+            FPDF_CloseDocument(_doc);
+            _doc = nullptr;
+        }
+
+        // Clear CPU memory
+        _pagePixels.clear();
+        _pagePixels.shrink_to_fit();
+        _pdfData.clear();
+        _pdfData.shrink_to_fit();
+
+        return Ok();
+    }
+
+    Result<void> allocateTextures() override {
+        _textureHandle = TextureHandle::invalid();
+        ydebug("Pdf::allocateTextures: pixels={} needsRender={} renderW={} renderH={}",
+               _pagePixels.size(), _needsRender, _renderWidth, _renderHeight);
+
+        // Render page if needed (first time or page change) so pixels are ready for createAtlas
+        if (_needsRender) {
+            if (auto res = renderCurrentPage(); !res) {
+                return Err<void>("Pdf::allocateTextures: render failed", res);
+            }
+            _needsRender = false;
+        }
+
+        if (!_pagePixels.empty()) {
+            if (auto res = linkPixelsToHandle(); !res) {
+                return Err<void>("Pdf::allocateTextures: failed to link texture handle", res);
+            }
+            _metadataDirty = true;
+            _needsUpload = false;
+            ydebug("Pdf::allocateTextures: linked ok, texHandle id={} renderW={} renderH={}",
+                   _textureHandle.id, _renderWidth, _renderHeight);
+        }
+        return Ok();
+    }
+
+    Result<void> writeTextures() override {
+        if (_textureHandle.isValid() && !_pagePixels.empty()) {
+            if (auto res = _cardMgr->textureManager()->write(_textureHandle, _pagePixels.data()); !res) {
+                return Err<void>("Pdf::writeTextures: write failed", res);
+            }
+        }
+        return Ok();
+    }
+
+    void renderToStaging(float time) override {
+        (void)time;
+
+        // Rasterize current page to CPU pixel buffer
+        if (_needsRender) {
+            if (auto res = renderCurrentPage(); !res) {
+                yerror("Pdf::renderToStaging: render failed: {}", error_msg(res));
+            }
+            _needsRender = false;
+            _needsUpload = true;
+        }
+    }
+
+    Result<void> finalize() override {
+        // Upload rasterized pixels to texture handle
+        if (_needsUpload && !_pagePixels.empty()) {
+            if (auto res = linkPixelsToHandle(); !res) {
+                return Err<void>("Pdf::render: link failed", res);
+            }
+            _needsUpload = false;
+        }
+
+        if (_metadataDirty) {
+            if (auto res = uploadMetadata(); !res) {
+                return Err<void>("Pdf::render: metadata upload failed", res);
+            }
+            _metadataDirty = false;
+        }
+
+        return Ok();
+    }
+
+    //=========================================================================
+    // EventListener interface
+    //=========================================================================
+
+    Result<bool> onEvent(const base::Event& event) override {
+        // Handle SetFocus events
+        if (event.type == base::Event::Type::SetFocus) {
+            if (event.setFocus.objectId == id()) {
+                if (!_focused) {
+                    _focused = true;
+                    ydebug("Pdf::onEvent: focused (id={})", id());
+                }
+                return Ok(true);
+            } else if (_focused) {
+                _focused = false;
+                ydebug("Pdf::onEvent: unfocused (id={})", id());
+            }
+            return Ok(false);
+        }
+
+        if (!_focused) {
+            return Ok(false);
+        }
+
+        // Handle scroll events when focused
+        if (event.type == base::Event::Type::Scroll) {
+            if (event.scroll.mods & GLFW_MOD_CONTROL) {
+                // Ctrl+Scroll: zoom
+                float zoomDelta = event.scroll.dy * 0.1f;
+                float newZoom = std::clamp(_contentZoom + zoomDelta, 0.1f, 10.0f);
+                if (newZoom != _contentZoom) {
+                    _contentZoom = newZoom;
+                    _needsRender = true;
+                    _metadataDirty = true;
+                    ydebug("Pdf::onEvent: content zoom={:.2f}", _contentZoom);
+                }
+                return Ok(true);
+            } else {
+                // Plain scroll: page navigation
+                if (event.scroll.dy > 0 && _currentPage > 0) {
+                    _currentPage--;
+                    _needsRender = true;
+                    _metadataDirty = true;
+                    ydebug("Pdf::onEvent: prev page -> {}", _currentPage);
+                    return Ok(true);
+                } else if (event.scroll.dy < 0 && _currentPage < _pageCount - 1) {
+                    _currentPage++;
+                    _needsRender = true;
+                    _metadataDirty = true;
+                    ydebug("Pdf::onEvent: next page -> {}", _currentPage);
+                    return Ok(true);
+                }
+            }
+        }
+
+        return Ok(false);
+    }
+
+private:
+    //=========================================================================
+    // Event registration
+    //=========================================================================
+
+    Result<void> registerForEvents() {
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("Pdf::registerForEvents: no EventLoop instance", loopResult);
+        }
+        auto loop = *loopResult;
+        auto self = sharedAs<base::EventListener>();
+
+        if (auto res = loop->registerListener(base::Event::Type::SetFocus, self, 1000); !res) {
+            return Err<void>("Pdf::registerForEvents: failed to register SetFocus", res);
+        }
+        if (auto res = loop->registerListener(base::Event::Type::Scroll, self, 1000); !res) {
+            return Err<void>("Pdf::registerForEvents: failed to register Scroll", res);
+        }
+
+        ydebug("Pdf card {} registered for events (priority 1000)", id());
+        return Ok();
+    }
+
+    Result<void> deregisterFromEvents() {
+        // Guard: shared_from_this() is invalid during destruction or before
+        // the shared_ptr is fully initialized (e.g. createImpl failure path).
+        if (weak_from_this().expired()) {
+            return Ok();
+        }
+
+        auto loopResult = base::EventLoop::instance();
+        if (!loopResult) {
+            return Err<void>("Pdf::deregisterFromEvents: no EventLoop instance", loopResult);
+        }
+        auto loop = *loopResult;
+
+        if (auto res = loop->deregisterListener(sharedAs<base::EventListener>()); !res) {
+            return Err<void>("Pdf::deregisterFromEvents: failed to deregister", res);
+        }
+        return Ok();
+    }
+
+    //=========================================================================
+    // PDF rendering — renders directly at card pixel size
+    //
+    // The bitmap is always card-sized (widthCells * cellWidth × heightCells * cellHeight).
+    // At zoom=1 the whole page fits. At zoom>1 we tell PDFium to render the page
+    // at (baseSize * zoom) pixels but offset so that the viewport around
+    // (_centerX, _centerY) lands in the card-sized bitmap. PDFium clips
+    // automatically and — being a vector renderer — produces full-resolution
+    // output for the visible rectangle.
+    //=========================================================================
+
+    Result<void> renderCurrentPage() {
+        if (!_doc) {
+            return Err<void>("Pdf::renderCurrentPage: no document");
+        }
+
+        FPDF_PAGE page = FPDF_LoadPage(_doc, _currentPage);
+        if (!page) {
+            return Err<void>("Pdf::renderCurrentPage: failed to load page " + std::to_string(_currentPage));
+        }
+
+        // Card pixel dimensions (fixed output size)
+        uint32_t cardW = _widthCells * _cellWidth;
+        uint32_t cardH = _heightCells * _cellHeight;
+        if (cardW == 0) cardW = 800;
+        if (cardH == 0) cardH = 600;
+
+        _renderWidth = cardW;
+        _renderHeight = cardH;
+
+        // Page aspect ratio
+        double pageWidthPt = FPDF_GetPageWidth(page);
+        double pageHeightPt = FPDF_GetPageHeight(page);
+        double pageAspect = pageWidthPt / pageHeightPt;
+        double cardAspect = static_cast<double>(cardW) / static_cast<double>(cardH);
+
+        // At zoom=1 the whole page fits in the card (preserving aspect ratio)
+        double baseW, baseH;
+        if (pageAspect > cardAspect) {
+            baseW = cardW;
+            baseH = cardW / pageAspect;
+        } else {
+            baseH = cardH;
+            baseW = cardH * pageAspect;
+        }
+
+        // At current zoom the page occupies this many pixels
+        int sizeX = static_cast<int>(baseW * _contentZoom);
+        int sizeY = static_cast<int>(baseH * _contentZoom);
+
+        // Position so that (_centerX, _centerY) of the page is at the
+        // center of the card bitmap. PDFium clips anything outside.
+        int startX = static_cast<int>(cardW / 2.0 - _centerX * sizeX);
+        int startY = static_cast<int>(cardH / 2.0 - _centerY * sizeY);
+
+        ydebug("Pdf::renderCurrentPage: page {} bitmap={}x{} pageSize={}x{} "
+              "start=({},{}) zoom={:.2f} center=({:.2f},{:.2f})",
+              _currentPage, cardW, cardH, sizeX, sizeY,
+              startX, startY, _contentZoom, _centerX, _centerY);
+
+        // Create card-sized bitmap (BGRA)
+        FPDF_BITMAP bitmap = FPDFBitmap_Create(cardW, cardH, 0);
+        if (!bitmap) {
+            FPDF_ClosePage(page);
+            return Err<void>("Pdf::renderCurrentPage: FPDFBitmap_Create failed");
+        }
+
+        // White background
+        FPDFBitmap_FillRect(bitmap, 0, 0, cardW, cardH, 0xFFFFFFFF);
+
+        // Render — PDFium scales the page to sizeX×sizeY and places it at
+        // (startX, startY) on the bitmap. Only the visible part is rasterized.
+        FPDF_RenderPageBitmap(bitmap, page, startX, startY, sizeX, sizeY, 0,
+                              FPDF_ANNOT | FPDF_PRINTING);
+
+        // Convert BGRA → RGBA
+        uint8_t* bitmapData = static_cast<uint8_t*>(FPDFBitmap_GetBuffer(bitmap));
+        int stride = FPDFBitmap_GetStride(bitmap);
+        size_t pixelCount = static_cast<size_t>(cardW) * cardH;
+
+        _pagePixels.resize(pixelCount * 4);
+
+        for (uint32_t y = 0; y < cardH; ++y) {
+            const uint8_t* srcRow = bitmapData + y * stride;
+            uint8_t* dstRow = _pagePixels.data() + y * cardW * 4;
+            for (uint32_t x = 0; x < cardW; ++x) {
+                dstRow[x * 4 + 0] = srcRow[x * 4 + 2]; // R ← B
+                dstRow[x * 4 + 1] = srcRow[x * 4 + 1]; // G
+                dstRow[x * 4 + 2] = srcRow[x * 4 + 0]; // B ← R
+                dstRow[x * 4 + 3] = srcRow[x * 4 + 3]; // A
+            }
+        }
+
+        FPDFBitmap_Destroy(bitmap);
+        FPDF_ClosePage(page);
+
+        _metadataDirty = true;
+
+        ydebug("Pdf::renderCurrentPage: rendered {} bytes ({}x{})",
+              _pagePixels.size(), cardW, cardH);
+        return Ok();
+    }
+
+    //=========================================================================
+    // Link CPU pixel buffer to texture handle for atlas packing
+    //=========================================================================
+
+    Result<void> linkPixelsToHandle() {
+        if (_pagePixels.empty() || _renderWidth == 0 || _renderHeight == 0) {
+            return Err<void>("Pdf::linkPixelsToHandle: no data");
+        }
+
+        // Allocate texture handle if needed
+        if (!_textureHandle.isValid()) {
+            auto allocResult = _cardMgr->textureManager()->allocate(_renderWidth, _renderHeight);
+            if (!allocResult) {
+                return Err<void>("Pdf::linkPixelsToHandle: failed to allocate texture handle", allocResult);
+            }
+            _textureHandle = *allocResult;
+            ydebug("Pdf::linkPixelsToHandle: allocated texture handle id={}", _textureHandle.id);
+        }
+
+        ydebug("Pdf::linkPixelsToHandle: linked {}x{} pixels to handle id={}",
+              _renderWidth, _renderHeight, _textureHandle.id);
+        return Ok();
+    }
+
+    //=========================================================================
+    // Args parsing
+    //=========================================================================
+
+    void parseArgs(const std::string& args) {
+        ydebug("Pdf::parseArgs: args='{}'", args);
+
+        std::istringstream iss(args);
+        std::string token;
+
+        while (iss >> token) {
+            if (token == "--input" || token == "-i") {
+                std::string val;
+                if (iss >> val) {
+                    _inputSource = val;
+                }
+            } else if (token == "--zoom" || token == "-z") {
+                float val;
+                if (iss >> val) {
+                    _contentZoom = std::clamp(val, 0.1f, 10.0f);
+                }
+            } else if (token == "--page" || token == "-p") {
+                int val;
+                if (iss >> val) {
+                    _currentPage = std::max(0, val);
+                }
+            }
+        }
+    }
+
+    //=========================================================================
+    // Metadata upload
+    //=========================================================================
+
+    Result<void> uploadMetadata() {
+        if (!_metaHandle.isValid()) {
+            return Err<void>("Pdf::uploadMetadata: invalid metadata handle");
+        }
+
+        Metadata meta = {};
+        meta.textureDataOffset = 0;  // No longer used (atlas position set by createAtlas)
+        meta.textureWidth = _renderWidth;
+        meta.textureHeight = _renderHeight;
+
+        // Get atlas position from handle
+        if (_textureHandle.isValid()) {
+            auto pos = _cardMgr->textureManager()->getAtlasPosition(_textureHandle);
+            meta.atlasX = pos.x;
+            meta.atlasY = pos.y;
+        } else {
+            meta.atlasX = 0;
+            meta.atlasY = 0;
+        }
+        meta.widthCells = _widthCells;
+        meta.heightCells = _heightCells;
+        meta.zoom = 1.0f;
+        meta.centerX = 0.5f;
+        meta.centerY = 0.5f;
+        meta.flags = 0;
+        meta.bgColor = 0xFFFFFFFF;
+        meta.scaledWidth = _renderWidth;
+        meta.scaledHeight = _renderHeight;
+
+        ydebug("Pdf::uploadMetadata: offset={} size={}x{} page={}/{} zoom={:.2f}",
+              _metaHandle.offset, _renderWidth, _renderHeight,
+              _currentPage + 1, _pageCount, _contentZoom);
+
+        if (auto res = _cardMgr->writeMetadata(_metaHandle, &meta, sizeof(meta)); !res) {
+            return Err<void>("Pdf::uploadMetadata: write failed", res);
+        }
+
+        return Ok();
+    }
+
+    //=========================================================================
+    // Data structures
+    //=========================================================================
+
+    // Metadata structure (64 bytes, matches Image/Texture card shader layout)
+    struct Metadata {
+        uint32_t textureDataOffset;
+        uint32_t textureWidth;
+        uint32_t textureHeight;
+        uint32_t atlasX;
+        uint32_t atlasY;
+        uint32_t widthCells;
+        uint32_t heightCells;
+        float zoom;
+        float centerX;
+        float centerY;
+        uint32_t flags;
+        uint32_t bgColor;
+        uint32_t scaledWidth;
+        uint32_t scaledHeight;
+        uint32_t _reserved[2];
+    };
+    static_assert(sizeof(Metadata) == 64, "Metadata must be 64 bytes");
+
+    //=========================================================================
+    // Member variables
+    //=========================================================================
+
+    const YettyContext& _ctx;
+    std::string _argsStr;
+    std::string _inputSource;  // "-" for payload, or file path
+
+    // PDF document (PDFium)
+    std::vector<uint8_t> _pdfData;         // Keep payload alive for PDFium
+    FPDF_DOCUMENT _doc = nullptr;
+    int _currentPage = 0;
+    int _pageCount = 0;
+
+    // Rendered page pixels (CPU memory, RGBA, card-sized)
+    std::vector<uint8_t> _pagePixels;
+    uint32_t _renderWidth = 0;
+    uint32_t _renderHeight = 0;
+
+    // Content zoom & pan
+    float _contentZoom = 1.0f;
+    float _centerX = 0.5f;   // 0..1 in page space
+    float _centerY = 0.5f;
+
+    // Cell dimensions
+    uint32_t _cellWidth = 10;
+    uint32_t _cellHeight = 20;
+
+    // Texture handle for atlas packing
+    TextureHandle _textureHandle = TextureHandle::invalid();
+
+    // State
+    bool _focused = false;
+    bool _needsRender = false;
+    bool _needsUpload = false;
+    bool _metadataDirty = true;
+};
+
+//=============================================================================
+// Factory methods
+//=============================================================================
+
+Result<Pdf::Ptr> Pdf::createImpl(
+    ContextType& ctx,
+    const YettyContext& yettyCtx,
+    int32_t x, int32_t y,
+    uint32_t widthCells, uint32_t heightCells,
+    const std::string& args,
+    const std::string& payload) noexcept
+{
+    (void)ctx;
+
+    if (!yettyCtx.cardManager) {
+        return Err<Ptr>("Pdf::createImpl: null CardBufferManager");
+    }
+    if (false) { // cardManager always valid
+        return Err<Ptr>("Pdf::createImpl: null GpuTextureManager");
+    }
+
+    auto card = std::make_shared<PdfImpl>(
+        yettyCtx, x, y, widthCells, heightCells, args, payload);
+
+    if (auto res = card->init(); !res) {
+        return Err<Ptr>("Pdf::createImpl: init failed", res);
+    }
+
+    return Ok<Ptr>(card);
+}
+
+} // namespace yetty::card

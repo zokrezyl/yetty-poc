@@ -1,0 +1,150 @@
+# Yetty Terminal Configuration
+# ============================
+# This is the default configuration file for yetty.
+# It is installed to ~/.config/yetty/config.yaml on first run.
+#
+# All settings can be overridden via environment variables by:
+#   1. Converting path to uppercase (e.g., rendering/damage-tracking)
+#   2. Replacing / and - with _ (RENDERING_DAMAGE_TRACKING)
+#   3. Prefixing with YETTY_ (YETTY_RENDERING_DAMAGE_TRACKING)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Font Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+font:
+  # Font family to use (default uses the embedded Nerd Font)
+  # Set to a system font name to use fontconfig lookup
+  family: "default"
+
+  # Font size in points (currently not configurable, for future use)
+  # size: 14
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rendering Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+rendering:
+  # Enable damage tracking for efficient partial redraws
+  # Reduces GPU load by only redrawing changed regions
+  damage-tracking: true
+
+  # Show FPS counter in the status bar
+  show-fps: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Terminal Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+scrollback:
+  # Number of lines to keep in scrollback buffer
+  lines: 10000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shell Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+shell:
+  # Environment variables to export to the shell
+  env:
+    TERM: "xterm-256color"
+    COLORTERM: "truecolor"
+    # YETTY_SOCKET is set at runtime with the RPC socket path
+
+  # Shell command to execute (set via -c/-e flags, not typically in config)
+  # command: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plugins Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+plugins:
+  # Colon-separated list of plugin directories
+  # Defaults to ./plugins relative to the executable
+  path: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RPC Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+rpc:
+  # Unix socket path for RPC communication (set at runtime)
+  # Typically placed in $XDG_RUNTIME_DIR/yetty-<pid>.sock
+  socket-path: ""
+  enabled: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shader Preloading Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Shaders listed here are compiled at startup to avoid first-use stutter.
+# Format: "0xNNNN-name" matching the shader filename (without .wgsl extension)
+# Uncomment shaders you use frequently to preload them at startup.
+shaders:
+  preload:
+    # ── Card Shaders ──────────────────────────────────────────────────────────
+    cards:
+      - "0x0000-texture"       # Image cards - commonly used
+      - "0x0003-ydraw"         # Vector graphics - commonly used
+      # - "0x0001-plot"        # Legacy plot cards
+      # - "0x0004-ypaint"      # Paint primitives
+      # - "0x0005-jdraw-compute"  # Compute-based drawing
+      # - "0x0006-ytext"       # Rich text rendering
+      # - "0x0007-qrcode"      # QR code generation
+      # - "0x0008-ygrid"       # Grid layouts
+      - "0x0009-yplot"       # Modern plot cards
+      # - "0x000A-yvideo"      # Video playback
+
+    # ── Glyph Shaders (animated single-cell glyphs) ───────────────────────────
+    glyphs:
+      # Basic animations
+      # - "0x0000-spinner"     # Loading spinner
+      # - "0x0001-pulse"       # Pulsing effect
+      # - "0x0002-wave"        # Wave animation
+      # - "0x0003-fire"        # Fire effect
+      # - "0x0004-gem"         # Gem/crystal
+      # - "0x0005-heart"       # Beating heart
+      # - "0x0006-party"       # Party/celebration
+      # - "0x0007-plasma"      # Plasma effect
+      # - "0x0008-ripple"      # Ripple animation
+      # - "0x0009-rocket"      # Rocket launch
+      # - "0x000a-smiley"      # Animated smiley
+      # - "0x000b-sparkle"     # Sparkle effect
+      # - "0x000c-star"        # Twinkling star
+      # - "0x0012-watch"       # Clock/watch
+      # - "0x0013-spiral"      # Spiral animation
+      #
+      # Progress indicators
+      # - "0x0015-border-dots" # Dots around border
+      # - "0x0016-orbit-dots"  # Orbiting dots
+      # - "0x0017-border-dots-grouped"  # Grouped border dots
+      # - "0x0018-worm"        # Worm/snake animation
+      # - "0x0019-bouncing-ball"  # Bouncing ball
+      # - "0x001a-radar-sweep" # Radar sweep
+      # - "0x001b-hourglass"   # Hourglass timer
+      # - "0x001c-dna-helix"   # DNA helix
+      # - "0x001d-equalizer"   # Audio equalizer
+      # - "0x001e-pendulum"    # Swinging pendulum
+      # - "0x001f-conveyor-dots"  # Conveyor belt dots
+      # - "0x0020-pong"        # Pong game
+      # - "0x0021-rain"        # Rain drops
+      # - "0x0022-orbit"       # Orbital motion
+      # - "0x0023-crosshair-pulse"  # Pulsing crosshair
+      # - "0x0024-matrix-rain" # Matrix-style rain
+      # - "0x0025-metaballs"   # Metaball animation
+      # - "0x0026-heartbeat"   # Heartbeat monitor
+      # - "0x0027-typing-dots" # Typing indicator
+      # - "0x0028-signal-bars" # Signal strength bars
+      # - "0x0029-vinyl"       # Spinning vinyl record
+      # - "0x002a-dvd-bounce"  # DVD screensaver bounce
+      #
+      # Decorative/artistic (high GPU cost)
+      # - "0xeff5-butterfly-flock"  # Butterfly swarm
+      # - "0xeff6-looping-spline"   # Spline animation
+      # - "0xeff7-mandelbrot-deco"  # Mandelbrot decoration
+      # - "0xeff8-hg-sdf"      # SDF rendering
+      # - "0xeff9-voronoi"     # Voronoi diagram
+      # - "0xeffa-minkowski-tube"   # Minkowski tube
+      # - "0xeffb-biomine"     # Biomine effect
+      # - "0xeffc-julia"       # Julia set fractal
+      # - "0xeffd-mandelbrot"  # Mandelbrot fractal
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Debug Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+debug:
+  # Show damage rectangles (for debugging rendering issues)
+  damage-rects: false

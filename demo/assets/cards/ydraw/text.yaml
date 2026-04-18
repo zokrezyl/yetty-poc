@@ -1,0 +1,99 @@
+# YDraw Text Demo - Text with different sizes and fonts
+background: "#1a1a2e"
+
+body:
+  - text:
+      position: [20, 30]
+      content: "Small Text (12px) abcdefghijklmnoprst"
+      font-size: 12
+      color: "#ecf0f1"
+
+  - text:
+      position: [20, 60]
+      content: "Medium Text (18px) abcdefghijklmnoprst"
+      font-size: 18
+      color: "#3498db"
+
+  - text:
+      position: [20, 100]
+      content: "Large Text (24px) abcdefghijklmnoprst"
+      font-size: 24
+      color: "#2ecc71"
+
+  - text:
+      position: [20, 150]
+      content: "Extra Large (36px)"
+      font-size: 36
+      color: "#e74c3c"
+
+  - text:
+      position: [20, 220]
+      content: "Huge Title (48px)"
+      font-size: 48
+      color: "#f39c12"
+
+  - text:
+      position: [20, 290]
+      content: "Custom Font: Liberation Sans: abcdefghijklmnoprst"
+      font-size: 32
+      font: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+      color: "#9b59b6"
+
+  - text:
+      position: [20, 310]
+      content: "Custom Font: Liberation Sans: abcdefghijklmnoprst"
+      font-size: 32
+      font: "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman_Bold.ttf"
+      color: "#9b59b6"
+
+  - text:
+      position: [20, 350]
+      content: "NotoSans Regular: jypqg abcdefghijklmnoprst"
+      font-size: 16
+      font: "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+      color: "#ecf0f1"
+
+  - text:
+      position: [20, 375]
+      content: "NotoSans Bold: jypqg abcdefghijklmnoprst"
+      font-size: 16
+      font: "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
+      color: "#3498db"
+
+  - text:
+      position: [20, 400]
+      content: "NotoSans Italic: jypqg abcdefghijklmnoprst"
+      font-size: 16
+      font: "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf"
+      color: "#2ecc71"
+
+  - text:
+      position: [20, 425]
+      content: "DejaVuSansMono: jypqg abcdefghijklmnoprst"
+      font-size: 16
+      font: "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+      color: "#e74c3c"
+
+  - text:
+      position: [20, 450]
+      content: "LiberationSans Regular: jypqg abcdefghijklmnoprst"
+      font-size: 16
+      font: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+      color: "#f39c12"
+
+  - text:
+      position: [500, 100]
+      content: "Vertical Text (90°)"
+      font-size: 20
+      font: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+      color: "#1abc9c"
+      rotation: 90
+
+  - text:
+      position: [350, 350]
+      content: "Diagonal Text (45°)"
+      font-size: 24
+      font: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+      color: "#e67e22"
+      rotation: 45
+

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <!-- Pentagon -->
+  <polygon points="100,30 140,60 125,100 75,100 60,60" fill="#e74c3c" stroke="#c0392b" stroke-width="2"/>
+  
+  <!-- Hexagon -->
+  <polygon points="250,40 290,60 290,100 250,120 210,100 210,60" fill="#3498db" stroke="#2980b9" stroke-width="2"/>
+  
+  <!-- Star -->
+  <polygon points="350,30 360,55 390,55 370,72 380,100 350,82 320,100 330,72 310,55 340,55" 
+           fill="#f1c40f" stroke="#d4ac0d" stroke-width="2"/>
+  
+  <!-- Arrow pointing right -->
+  <polygon points="50,150 100,150 100,130 150,170 100,210 100,190 50,190" 
+           fill="#2ecc71" stroke="#27ae60" stroke-width="2"/>
+  
+  <!-- Diamond -->
+  <polygon points="250,130 290,170 250,210 210,170" fill="#9b59b6" stroke="#8e44ad" stroke-width="2"/>
+  
+  <!-- House shape -->
+  <polygon points="350,140 390,180 390,240 310,240 310,180" fill="#e67e22" stroke="#d35400" stroke-width="2"/>
+  
+  <!-- Triangle -->
+  <polygon points="100,240 150,280 50,280" fill="#1abc9c" stroke="#16a085" stroke-width="2"/>
+</svg>

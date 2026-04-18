@@ -1,0 +1,59 @@
+Fraunhofer FDK AAC Codec Library for Android
+
+Software License for The Fraunhofer FDK AAC Codec Library for Android
+
+Copyright (c) 1995 - 2018 Fraunhofer-Gesellschaft zur Foerderung der
+angewandten Forschung e.V. All rights reserved.
+
+1. INTRODUCTION
+
+The Fraunhofer FDK AAC Codec Library for Android ("FDK AAC Codec") is
+software that implements the MPEG Advanced Audio Coding ("AAC") encoding
+and decoding scheme for digital audio. This FDK AAC Codec software is
+intended to be used on a wide variety of Android devices.
+
+AAC's HE-AAC and HE-AAC v2 versions are regarded as today's most efficient
+general perceptual audio codecs.
+
+2. COPYRIGHT LICENSE
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted without payment of copyright license fees
+provided that you satisfy the following conditions:
+
+You must retain the complete text of this software license in
+redistributions of the FDK AAC Codec or your modifications thereto in
+source code form.
+
+You must retain the complete text of this software license in the
+documentation and/or other materials provided with redistributions of
+the FDK AAC Codec or your modifications thereto in binary form. You must
+make available free of charge copies of the complete source code of the
+FDK AAC Codec and your modifications thereto to recipients of copies in
+binary form.
+
+The name of Fraunhofer may not be used to endorse or promote products
+derived from this library without prior written permission.
+
+You may not charge copyright license fees for anyone to use, copy or
+distribute the FDK AAC Codec software or your modifications thereto.
+
+Your modified versions of the FDK AAC Codec must carry prominent notices
+stating that you changed the software and the date of any change.
+
+3. NO PATENT LICENSE
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PATENT CLAIMS, including without
+limitation the patents of Fraunhofer, ARE GRANTED BY THIS SOFTWARE LICENSE.
+Fraunhofer provides no warranty of patent non-infringement with respect to
+this software.
+
+4. DISCLAIMER
+
+This FDK AAC Codec software is provided by Fraunhofer on behalf of the
+copyright holders and contributors "AS IS" and WITHOUT ANY EXPRESS OR
+IMPLIED WARRANTIES, including but not limited to the implied warranties
+of merchantability and fitness for a particular purpose.
+
+---
+Used by: FDK-AAC (Android audio codec)

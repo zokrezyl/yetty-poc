@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>yetty - GPU Terminal</title>
+  <style>
+    body {
+      font-size: 14px;
+      color: #cdd6f4;
+      margin: 0;
+      padding: 0;
+    }
+    .hero {
+      background-color: #1e1e2e;
+      padding: 30px 20px;
+      text-align: center;
+      border-bottom: 3px solid #6c63ff;
+    }
+    .hero h1 {
+      font-size: 28px;
+      color: #ffffff;
+      margin: 0 0 8px 0;
+    }
+    .hero p {
+      color: #9399b2;
+      margin: 0;
+      font-size: 15px;
+    }
+    .features {
+      padding: 15px 20px;
+    }
+    .features h2 {
+      color: #89b4fa;
+      font-size: 18px;
+      border-bottom: 1px solid #45475a;
+      padding-bottom: 5px;
+    }
+    .grid {
+      margin-bottom: 15px;
+    }
+    .feature-item {
+      background-color: #181825;
+      border: 1px solid #313244;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 8px;
+    }
+    .feature-item h3 {
+      color: #f0c674;
+      margin: 0 0 4px 0;
+      font-size: 15px;
+    }
+    .feature-item p {
+      margin: 0;
+      color: #a6adc8;
+      font-size: 13px;
+    }
+    .cta {
+      background-color: #6c63ff;
+      color: #ffffff;
+      padding: 10px 20px;
+      text-align: center;
+      border-radius: 4px;
+      margin: 10px 20px;
+      font-size: 15px;
+    }
+    .footer {
+      padding: 10px 20px;
+      text-align: center;
+      color: #585b70;
+      font-size: 11px;
+      border-top: 1px solid #313244;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>yetty</h1>
+    <p>A GPU-accelerated terminal emulator with rich content cards</p>
+  </div>
+
+  <div class="features">
+    <h2>Features</h2>
+    <div class="grid">
+      <div class="feature-item">
+        <h3>GPU Rendering</h3>
+        <p>WebGPU-based rendering pipeline with SDF primitives, MSDF text,
+           and shader effects. Everything runs on the GPU.</p>
+      </div>
+      <div class="feature-item">
+        <h3>Rich Cards</h3>
+        <p>Embed plots, PDFs, images, HTML, markdown, 3D scenes, and
+           custom shaders directly in your terminal.</p>
+      </div>
+      <div class="feature-item">
+        <h3>HTML/CSS Support</h3>
+        <p>Render HTML with full CSS 2.1 layout via litehtml. Styled content
+           is drawn as GPU-accelerated SDF shapes.</p>
+      </div>
+      <div class="feature-item">
+        <h3>Vector Text</h3>
+        <p>Multi-channel Signed Distance Field fonts stay crisp at any zoom
+           level. No bitmap rasterization needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="cta">
+    Try it: yetty-client create yhtml -i page.html
+  </div>
+
+  <div class="footer">
+    yetty terminal &bull; litehtml &bull; WebGPU &bull; MSDF
+  </div>
+</body>
+</html>

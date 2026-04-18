@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>yetty Filesystem Test</title>
+</head>
+<body>
+<canvas id="canvas" style="display:none"></canvas>
+<pre id="output"></pre>
+<script>
+    const output = document.getElementById('output');
+    function log(msg) {
+        console.log(msg);
+        output.textContent += msg + '\n';
+    }
+
+    log('=== YETTY FILESYSTEM TEST ===');
+
+    var Module = {
+        canvas: document.getElementById('canvas'),
+        print: (text) => log('[yetty] ' + text),
+        printErr: (text) => log('[yetty-err] ' + text),
+        onRuntimeInitialized: function() {
+            log('=== RUNTIME INITIALIZED ===');
+
+            // Test filesystem
+            setTimeout(() => {
+                try {
+                    const FS = Module.FS;
+                    if (!FS) {
+                        log('ERROR: FS not available');
+                        return;
+                    }
+
+                    log('--- Checking /assets ---');
+                    const assets = FS.readdir('/assets');
+                    log('/assets: ' + assets.join(', '));
+
+                    log('--- Checking /assets/fonts-cdb ---');
+                    const fontsCdb = FS.readdir('/assets/fonts-cdb');
+                    log('/assets/fonts-cdb: ' + fontsCdb.join(', '));
+
+                    // Verify CDB files exist and have content
+                    const cdbFiles = fontsCdb.filter(f => f.endsWith('.cdb'));
+                    log('CDB files found: ' + cdbFiles.length);
+
+                    for (const cdb of cdbFiles) {
+                        const path = '/assets/fonts-cdb/' + cdb;
+                        const stat = FS.stat(path);
+                        log('  ' + cdb + ': ' + stat.size + ' bytes');
+                        if (stat.size < 1000000) {
+                            log('ERROR: CDB file too small: ' + path);
+                        }
+                    }
+
+                    log('--- Checking /assets/shaders ---');
+                    const shaders = FS.readdir('/assets/shaders');
+                    log('/assets/shaders: ' + shaders.filter(f => f.endsWith('.wgsl')).join(', '));
+
+                    log('--- Checking /assets/shaders/cards ---');
+                    const cardShaders = FS.readdir('/assets/shaders/cards');
+                    log('Card shaders: ' + cardShaders.filter(f => f.endsWith('.wgsl')).length + ' files');
+
+                    log('--- Checking /demo ---');
+                    const demo = FS.readdir('/demo');
+                    log('/demo entries: ' + demo.length);
+
+                    // Verify TTF fonts
+                    log('--- Checking TTF fonts ---');
+                    const ttfFiles = assets.filter(f => f.endsWith('.ttf'));
+                    for (const ttf of ttfFiles) {
+                        const path = '/assets/' + ttf;
+                        const stat = FS.stat(path);
+                        log('  ' + ttf + ': ' + stat.size + ' bytes');
+                    }
+
+                    // Final verification
+                    if (cdbFiles.length === 4 && ttfFiles.length >= 4) {
+                        log('');
+                        log('=== FILESYSTEM TEST PASSED ===');
+                    } else {
+                        log('');
+                        log('=== FILESYSTEM TEST FAILED ===');
+                        log('Expected 4 CDB files, got ' + cdbFiles.length);
+                        log('Expected 4+ TTF files, got ' + ttfFiles.length);
+                    }
+                } catch (e) {
+                    log('ERROR: ' + e.message);
+                    log('=== FILESYSTEM TEST FAILED ===');
+                }
+            }, 100);
+        }
+    };
+
+    // Load yetty.js
+    log('Loading yetty.js...');
+    const script = document.createElement('script');
+    script.src = 'yetty.js';
+    script.onerror = () => log('ERROR: Failed to load yetty.js');
+    document.head.appendChild(script);
+</script>
+</body>
+</html>

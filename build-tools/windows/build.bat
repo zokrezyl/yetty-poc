@@ -1,0 +1,135 @@
+@echo off
+REM Yetty Windows Build Script
+REM Usage: build.bat [debug|release] [clean|configure]
+
+setlocal enabledelayedexpansion
+
+set CONFIG=Release
+set CLEAN=0
+set CONFIGURE_ONLY=0
+
+REM Add GNU Make and NASM to PATH if available
+if exist "C:\Program Files (x86)\GnuWin32\bin" set PATH=C:\Program Files (x86)\GnuWin32\bin;%PATH%
+if exist "C:\Program Files\NASM" set PATH=C:\Program Files\NASM;%PATH%
+if exist "%LOCALAPPDATA%\bin\NASM" set PATH=%LOCALAPPDATA%\bin\NASM;%PATH%
+
+:parse_args
+if "%1"=="" goto :start
+if /i "%1"=="debug" (
+    set CONFIG=Debug
+    shift
+    goto :parse_args
+)
+if /i "%1"=="release" (
+    set CONFIG=Release
+    shift
+    goto :parse_args
+)
+if /i "%1"=="clean" (
+    set CLEAN=1
+    shift
+    goto :parse_args
+)
+if /i "%1"=="configure" (
+    set CONFIGURE_ONLY=1
+    shift
+    goto :parse_args
+)
+shift
+goto :parse_args
+
+:start
+REM Use current directory as project root (called from project root via make)
+set PROJECT_ROOT=%CD%\
+
+REM Convert to lowercase for build dir
+set CONFIG_LOWER=%CONFIG%
+if /i "%CONFIG%"=="Debug" set CONFIG_LOWER=debug
+if /i "%CONFIG%"=="Release" set CONFIG_LOWER=release
+
+set BUILD_DIR=%PROJECT_ROOT%build-windows-dawn-%CONFIG_LOWER%
+
+echo Yetty Windows Build
+echo   Project Root: %PROJECT_ROOT%
+echo   Build Dir: %BUILD_DIR%
+echo   Config: %CONFIG%
+echo.
+
+REM Setup MSVC environment if cl.exe is not already in PATH
+where cl.exe >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Setting up MSVC environment...
+    if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" x64
+    ) else (
+        echo ERROR: Could not find Visual Studio 2022 vcvarsall.bat
+        echo Install VS 2022 Build Tools: winget install Microsoft.VisualStudio.2022.BuildTools
+        exit /b 1
+    )
+)
+
+REM Verify compiler
+where cl.exe >nul 2>&1
+if %errorlevel% neq 0 (
+    echo ERROR: cl.exe not found after MSVC setup
+    exit /b 1
+)
+
+REM Clean if requested
+if %CLEAN%==1 (
+    if exist "%BUILD_DIR%" (
+        echo Cleaning build directory...
+        rmdir /s /q "%BUILD_DIR%"
+    )
+)
+
+REM Configure if needed
+if not exist "%BUILD_DIR%\build.ninja" (
+    if not exist "%BUILD_DIR%\*.sln" (
+        echo Configuring CMake...
+
+        REM Check for Ninja
+        where ninja >nul 2>&1
+        if !errorlevel!==0 (
+            cmake -B "%BUILD_DIR%" -G "Ninja" -DCMAKE_BUILD_TYPE=%CONFIG% -DWEBGPU_BACKEND=dawn "%PROJECT_ROOT%"
+        ) else (
+            cmake -B "%BUILD_DIR%" -G "Visual Studio 17 2022" -A x64 -DWEBGPU_BACKEND=dawn "%PROJECT_ROOT%"
+        )
+
+        if !errorlevel! neq 0 (
+            echo CMake configuration failed
+            exit /b 1
+        )
+    )
+)
+
+REM Exit if configure-only
+if %CONFIGURE_ONLY%==1 (
+    echo Configuration complete.
+    exit /b 0
+)
+
+REM Build
+echo Building...
+cmake --build "%BUILD_DIR%" --config %CONFIG% --parallel
+if %errorlevel% neq 0 (
+    echo Build failed
+    exit /b 1
+)
+
+echo.
+echo Build complete!
+
+if exist "%BUILD_DIR%\yetty.exe" (
+    echo Executable: %BUILD_DIR%\yetty.exe
+) else if exist "%BUILD_DIR%\%CONFIG%\yetty.exe" (
+    echo Executable: %BUILD_DIR%\%CONFIG%\yetty.exe
+) else (
+    echo WARNING: yetty.exe not found in expected locations
+)
+
+endlocal

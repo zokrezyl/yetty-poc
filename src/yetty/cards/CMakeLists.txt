@@ -1,0 +1,55 @@
+# Card subdirectories - each creates its own library
+add_subdirectory(texture)
+add_subdirectory(image)
+add_subdirectory(plot)
+add_subdirectory(ydraw)
+add_subdirectory(ypaint)
+add_subdirectory(diagram)
+add_subdirectory(ydraw-zoo)
+add_subdirectory(ydraw-maze)
+add_subdirectory(ytext)
+add_subdirectory(ygui)
+add_subdirectory(markdown)
+add_subdirectory(qrcode)
+add_subdirectory(yplot)
+
+add_subdirectory(ypdf)
+add_subdirectory(yhtml)
+if(YETTY_ENABLE_THORVG)
+    add_subdirectory(ythorvg)
+endif()
+add_subdirectory(ywasm)
+
+# yvideo requires too many storage buffers for WebAssembly (11 > 10 limit)
+if(NOT EMSCRIPTEN)
+    add_subdirectory(yvideo)
+endif()
+
+# Aggregate library linking all cards
+add_library(yetty_cards INTERFACE)
+target_link_libraries(yetty_cards INTERFACE
+    yetty_card_texture
+    yetty_card_image
+    yetty_card_plot
+    yetty_card_ydraw
+    yetty_card_ypaint
+    yetty_card_diagram
+    yetty_card_ydraw_zoo
+    yetty_card_ydraw_maze
+    yetty_card_ytext
+    yetty_card_ygui
+    yetty_card_markdown
+    yetty_card_qrcode
+    yetty_card_yplot
+    yetty_card_ypdf
+    yetty_card_yhtml
+    yetty_card_ywasm
+)
+
+if(YETTY_ENABLE_THORVG)
+    target_link_libraries(yetty_cards INTERFACE yetty_card_ythorvg)
+endif()
+
+if(NOT EMSCRIPTEN)
+    target_link_libraries(yetty_cards INTERFACE yetty_card_yvideo)
+endif()

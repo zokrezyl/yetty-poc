@@ -1,0 +1,14 @@
+# Simple test - just default font
+spans:
+  - text: "Hello World - Regular"
+    x: 10
+    y: 30
+    size: 24
+    color: [1.0, 1.0, 1.0, 1.0]
+
+  - text: "Hello World - Bold"
+    x: 10
+    y: 70
+    size: 24
+    style: bold
+    color: [1.0, 1.0, 0.0, 1.0]

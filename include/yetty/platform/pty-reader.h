@@ -1,0 +1,90 @@
+#pragma once
+
+#include <yetty/result.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+
+namespace yetty {
+
+struct PtyConfig {
+    std::string shell;           // Shell path (desktop) or VM config (webasm)
+    std::string command;         // Command to execute (if empty, start interactive shell)
+    uint32_t cols = 80;
+    uint32_t rows = 24;
+
+    // SSH mode (if sshHost is non-empty, use SSH instead of local PTY)
+    std::string sshHost;
+    uint16_t sshPort = 22;
+    std::string sshUser;
+    std::string sshIdentityFile;
+};
+
+/**
+ * PtyReader - Abstraction for reading from PTY/terminal source
+ *
+ * Desktop: Direct read from PTY fd (fast, non-blocking)
+ * Webasm: Read from internal buffer filled by JS/VM
+ *
+ * Terminal controls reading pace:
+ * - Normal data: read chunk, process, allow rendering
+ * - OSC data: keep reading until terminator (could be 2000MB)
+ */
+class PtyReader {
+public:
+    using Ptr = std::shared_ptr<PtyReader>;
+    using DataAvailableCallback = std::function<void()>;
+    using ExitCallback = std::function<void(int exitCode)>;
+
+    virtual ~PtyReader() = default;
+
+    /**
+     * Read up to maxLen bytes into buf.
+     * Returns actual bytes read, 0 if no data available.
+     * NON-BLOCKING - returns immediately if no data.
+     */
+    virtual size_t read(char* buf, size_t maxLen) = 0;
+
+    /**
+     * Write data to PTY input.
+     */
+    virtual void write(const char* data, size_t len) = 0;
+
+    /**
+     * Resize PTY dimensions.
+     */
+    virtual void resize(uint32_t cols, uint32_t rows) = 0;
+
+    /**
+     * Check if PTY/process still running.
+     */
+    virtual bool isRunning() const = 0;
+
+    /**
+     * Stop the PTY/process.
+     */
+    virtual void stop() = 0;
+
+    /**
+     * Set callback for when data becomes available.
+     * Desktop: triggered by poll event on PTY fd
+     * Webasm: triggered when JS pushes data
+     */
+    virtual void setDataAvailableCallback(DataAvailableCallback cb) = 0;
+
+    /**
+     * Set callback for when process exits.
+     */
+    virtual void setExitCallback(ExitCallback cb) = 0;
+
+    /**
+     * Start async operations (e.g., SSH connect).
+     * Called after init() when event loop is about to start.
+     * Default: no-op for readers that don't need deferred start.
+     */
+    virtual Result<void> run() { return Ok(); }
+};
+
+} // namespace yetty

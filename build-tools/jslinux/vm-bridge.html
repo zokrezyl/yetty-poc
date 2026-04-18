@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>JSLinux VM Bridge</title>
+    <style>
+        body { margin: 0; padding: 0; }
+        #term_container { display: none; }
+    </style>
+</head>
+<body>
+    <div id="term_container"></div>
+    <script src="term-bridge.js"></script>
+    <script>
+        // Modified jslinux loader for bridge mode
+        "use strict";
+
+        var term, console_write1, console_resize_event;
+
+        // Required by emulator WASM - must be global functions
+        function term_get_size() {
+            var size;
+            if (term) {
+                size = term.getSize();
+            } else {
+                size = [80, 25]; // fallback
+            }
+            return size;
+        }
+
+        function term_write(str) {
+            if (term) {
+                term.write(str);
+            }
+        }
+        var net_state, net_write_packet, net_set_carrier;
+        var fs_import_file;
+
+        // Runtime state tracking
+        var runtimeReady = false;
+        var pendingImports = [];
+
+        // Module object - Emscripten will populate this
+        var Module = {};
+
+        Module.onRuntimeInitialized = function() {
+            log("Emscripten runtime initialized");
+            runtimeReady = true;
+            processPendingImports();
+        };
+
+        // Force setTimeout mode for faster input processing in iframe
+        Module.postRun = function() {
+            if (typeof Module.setMainLoopTiming === 'function') {
+                Module.setMainLoopTiming(0, 0);
+            }
+        };
+
+        function log(msg) {
+            console.log("[vm-bridge] " + msg);
+        }
+
+        function term_handler(str) {
+            for (var i = 0; i < str.length; i++) {
+                console_write1(str.charCodeAt(i));
+            }
+        }
+
+        function update_downloading(flag) {
+            window.parent.postMessage({
+                type: 'vm-downloading',
+                ptyId: term ? term.ptyId : null,
+                downloading: flag
+            }, '*');
+        }
+
+        function get_params() {
+            var params = {};
+            var query = window.location.search.substring(1);
+            var pairs = query.split("&");
+            for (var i = 0; i < pairs.length; i++) {
+                var pair = pairs[i].split("=");
+                params[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+            }
+            return params;
+        }
+
+        function start_vm() {
+            var params = get_params();
+            var cpu = params["cpu"] || "x86_64";
+            var url = params["url"] || "alpine-x86_64.cfg";
+            var mem = parseInt(params["mem"]) || 256;
+            var cols = parseInt(params["cols"]) || 80;
+            var rows = parseInt(params["rows"]) || 25;
+
+            term = new Term({
+                cols: cols,
+                rows: rows,
+                scrollback: 0
+            });
+            term.setKeyHandler(term_handler);
+            term.open(document.getElementById("term_container"));
+
+            var vm_file;
+            switch(cpu) {
+                case "x86": vm_file = "x86emu"; break;
+                case "x86_64": vm_file = "x86_64emu"; break;
+                case "riscv64": vm_file = "riscvemu64"; break;
+                case "riscv32": vm_file = "riscvemu32"; break;
+                default:
+                    term.write("Error: Unknown cpu: " + cpu + "\r\n");
+                    return;
+            }
+            var vm_url = vm_file + "-wasm.js";
+            term.write("Loading " + vm_url + "...\r\n");
+
+            var cfg_url = new URL(url, window.location.href).href;
+
+            Module.preRun = function() {
+                initVM(cfg_url, mem, cols, rows);
+            };
+
+            var script = document.createElement('script');
+            script.src = vm_url;
+            script.onerror = function(e) {
+                term.write("Error loading emulator: " + vm_url + "\r\n");
+            };
+            document.body.appendChild(script);
+        }
+
+        function initVM(cfg_url, mem, cols, rows) {
+            try {
+                console_write1 = Module.cwrap('console_queue_char', null, ['number']);
+                fs_import_file = Module.cwrap('fs_import_file', null, ['string', 'number', 'number']);
+                net_write_packet = Module.cwrap('net_write_packet', null, ['number', 'number']);
+                net_set_carrier = Module.cwrap('net_set_carrier', null, ['number']);
+                console_resize_event = Module.cwrap('console_resize_event', null, []);
+
+                term.setResizeHandler(function(cols, rows) {
+                    if (console_resize_event) {
+                        console_resize_event();
+                    }
+                });
+            } catch(e) {
+                term.write("Error wrapping functions: " + e + "\r\n");
+                return;
+            }
+
+            term.write("Starting VM...\r\n");
+
+            try {
+                Module.ccall('vm_start', null,
+                    ['string', 'number', 'string', 'string', 'number', 'number', 'number', 'string'],
+                    [cfg_url, mem, "", "", 0, 0, 0, ""]);
+
+                // Resize events during boot
+                var resizeCount = 0;
+                var resizeInterval = setInterval(function() {
+                    resizeCount++;
+                    console_resize_event();
+                    if (resizeCount >= 10) {
+                        clearInterval(resizeInterval);
+                        // Import local files after VM has booted
+                        importLocalFiles();
+                    }
+                }, 200);
+            } catch(e) {
+                term.write("Error starting VM: " + e + "\r\n");
+            }
+        }
+
+        // Check if WASM runtime is ready for memory operations
+        function isRuntimeReady() {
+            return runtimeReady &&
+                   typeof _malloc === 'function' &&
+                   typeof HEAPU8 !== 'undefined';
+        }
+
+        function processPendingImports() {
+            if (pendingImports.length > 0) {
+                log("Processing " + pendingImports.length + " queued imports");
+                pendingImports.forEach(function(fn) { fn(); });
+                pendingImports = [];
+            }
+        }
+
+        // Import a file into the VM
+        function doImportFile(vmPath, data) {
+            if (!isRuntimeReady()) {
+                pendingImports.push(function() {
+                    doImportFile(vmPath, data);
+                });
+                return false;
+            }
+
+            try {
+                var ptr = _malloc(data.length);
+                if (!ptr) {
+                    log("malloc failed for: " + vmPath);
+                    return false;
+                }
+                HEAPU8.set(data, ptr);
+                fs_import_file(vmPath, ptr, data.length);
+                _free(ptr);
+                log("Imported: " + vmPath + " (" + data.length + " bytes)");
+                return true;
+            } catch (e) {
+                log("Error importing " + vmPath + ": " + e);
+                return false;
+            }
+        }
+
+        // Import local files from manifest
+        function importLocalFiles() {
+            log("Checking for local files manifest...");
+            fetch('local-files/manifest.json')
+                .then(function(r) {
+                    if (!r.ok) {
+                        log("No local files manifest (normal for production)");
+                        return null;
+                    }
+                    return r.json();
+                })
+                .then(function(manifest) {
+                    if (!manifest || !manifest.files) return;
+                    log("Found " + manifest.files.length + " files to import");
+
+                    var imported = 0;
+                    var total = manifest.files.length;
+
+                    manifest.files.forEach(function(filePath) {
+                        fetch('local-files/' + filePath)
+                            .then(function(r) { return r.arrayBuffer(); })
+                            .then(function(buf) {
+                                var data = new Uint8Array(buf);
+                                // Import with original path - appears at /path in VM
+                                doImportFile(filePath, data);
+                                imported++;
+                                if (imported === total) {
+                                    log("Import complete: " + imported + " files");
+                                    setupYettyTools();
+                                }
+                            })
+                            .catch(function(e) {
+                                log("Failed to fetch " + filePath);
+                                imported++;
+                            });
+                    });
+                })
+                .catch(function(e) {
+                    log("Local files import skipped: " + e);
+                });
+        }
+
+        // Run setup commands in VM to make tools available
+        function setupYettyTools() {
+            // Send commands to VM via console input
+            // Files are at / with their import paths, e.g. /bin/ycat
+            // Need to make them executable and add to PATH
+            var cmds = [
+                "chmod +x /bin/* 2>/dev/null",
+                "export PATH=/bin:$PATH",
+                "echo 'Yetty tools loaded: ycat yecho ybrowser'"
+            ].join(" && ") + "\n";
+
+            for (var i = 0; i < cmds.length; i++) {
+                console_write1(cmds.charCodeAt(i));
+            }
+            log("Sent setup commands to VM");
+        }
+
+        // Handle messages from parent
+        window.addEventListener('message', function(e) {
+            if (e.data.type === 'term-resize') {
+                if (console_resize_event) {
+                    console_resize_event();
+                }
+            }
+            if (e.data.type === 'import-file') {
+                var path = e.data.path;
+                var data = e.data.data;
+                if (doImportFile(path, data)) {
+                    window.parent.postMessage({
+                        type: 'file-imported',
+                        path: path,
+                        size: data.length
+                    }, '*');
+                } else {
+                    window.parent.postMessage({
+                        type: 'file-import-error',
+                        path: path,
+                        error: 'import failed'
+                    }, '*');
+                }
+            }
+        });
+
+        // Start when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', start_vm);
+        } else {
+            start_vm();
+        }
+    </script>
+</body>
+</html>

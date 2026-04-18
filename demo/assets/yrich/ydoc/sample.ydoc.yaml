@@ -1,0 +1,63 @@
+version: 1
+type: ydoc
+
+metadata:
+  modified: 1710892800
+  author: demo
+
+document:
+  pageWidth: 600
+  margin: 20
+
+  paragraphs:
+    - text: "Welcome to YDoc"
+      fontSize: 24
+      color: "#FF2563EB"
+      runs:
+        - start: 0
+          end: 15
+          format: 1
+
+    - text: ""
+
+    - text: "YDoc is a rich text document editor for the terminal. It supports:"
+
+    - text: ""
+
+    - text: "Rich Text Formatting"
+      fontSize: 16
+      runs:
+        - start: 0
+          end: 20
+          format: 1
+
+    - text: "Bold, italic, underline, and strikethrough styles"
+      runs:
+        - start: 0
+          end: 4
+          format: 1
+        - start: 6
+          end: 12
+          format: 2
+        - start: 14
+          end: 23
+          format: 4
+        - start: 29
+          end: 42
+          format: 8
+
+    - text: ""
+
+    - text: "Real-time Collaboration"
+      fontSize: 16
+      runs:
+        - start: 0
+          end: 23
+          format: 1
+
+    - text: "Multiple users can edit the same document simultaneously with operation-based synchronization."
+
+    - text: ""
+
+    - text: "Press 'q' to exit."
+      color: "#FF888888"

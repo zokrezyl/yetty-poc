@@ -1,0 +1,108 @@
+#pragma once
+
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+#include <yaml-cpp/yaml.h>
+#include <yetty/base/base.h>
+#include <yetty/result.hpp>
+#include <yetty/ygui/types.h>
+
+namespace yetty {
+
+using namespace yetty::base;
+
+class Config : public virtual Object, public ygui::TreeLike, public ObjectFactory<Config> {
+public:
+  using Ptr = std::shared_ptr<Config>;
+
+  // Create config: parses argc/argv, reads config file, applies env overrides
+  // Priority: CLI args > ENV vars > config file
+  // Use -c/--config to specify custom config file path
+  static Result<Ptr> createImpl(ContextType &ctx, int argc = 0, char *argv[] = nullptr) noexcept;
+
+  ~Config() override = default;
+
+  // Get a value by slash path (e.g., "plugins/path" or "rendering/damage-tracking")
+  // Returns nullopt if key doesn't exist
+  template <typename T> std::optional<T> get(const std::string &path) const;
+
+  // Get a value with default fallback
+  template <typename T>
+  T get(const std::string &path, const T &defaultValue) const;
+
+  // Get string list (for colon-separated paths like plugins/path)
+  virtual std::vector<std::string> getPathList(const std::string &path) const = 0;
+
+  // Check if a key exists
+  virtual bool has(const std::string &path) const = 0;
+
+  // Get the raw YAML node for advanced queries
+  virtual const YAML::Node &root() const = 0;
+
+  // Runtime write by slash path
+  virtual Result<void> setString(const std::string &path, const std::string &value) = 0;
+
+  // Save config to YAML file
+  virtual Result<void> saveFile(const std::string &path) = 0;
+
+  // Helper to get executable directory
+  static std::filesystem::path getExecutableDir();
+
+  // Helper to get XDG config path
+  static std::filesystem::path getXDGConfigPath();
+
+  // Helper to get default plugin paths (relative to executable)
+  static std::vector<std::string> getDefaultPluginPaths();
+
+  // Environment variable prefix
+  static constexpr const char *ENV_PREFIX = "YETTY_";
+
+  // Common config keys (slash-separated)
+  static constexpr const char *KEY_PLUGINS_PATH = "plugins/path";
+  static constexpr const char *KEY_RENDERING_DAMAGE_TRACKING = "rendering/damage-tracking";
+  static constexpr const char *KEY_RENDERING_SHOW_FPS = "rendering/show-fps";
+  static constexpr const char *KEY_SCROLLBACK_LINES = "scrollback/lines";
+  static constexpr const char *KEY_DEBUG_DAMAGE_RECTS = "debug/damage-rects";
+  static constexpr const char *KEY_FONT_FAMILY = "font/family";
+  static constexpr const char *KEY_SHELL_ENV = "shell/env";
+  static constexpr const char *KEY_RPC_SOCKET_PATH = "rpc/socket-path";
+
+  // Legacy accessors for backward compatibility
+  virtual bool useDamageTracking() const = 0;
+  virtual bool showFps() const = 0;
+  virtual bool debugDamageRects() const = 0;
+  virtual uint32_t scrollbackLines() const = 0;
+  virtual std::vector<std::string> pluginPaths() const = 0;
+  virtual std::string fontFamily() const = 0;
+
+protected:
+  Config() = default;
+
+  // Get YAML node by slash path - used by template methods
+  virtual YAML::Node getNode(const std::string &path) const = 0;
+};
+
+// Template implementations
+template <typename T>
+std::optional<T> Config::get(const std::string &path) const {
+  YAML::Node node = getNode(path);
+  if (!node || node.IsNull()) {
+    return std::nullopt;
+  }
+  try {
+    return node.as<T>();
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+template <typename T>
+T Config::get(const std::string &path, const T &defaultValue) const {
+  auto value = get<T>(path);
+  return value.value_or(defaultValue);
+}
+
+} // namespace yetty

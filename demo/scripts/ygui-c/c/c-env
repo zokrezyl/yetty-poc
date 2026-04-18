@@ -1,0 +1,37 @@
+# YGui-C environment setup for C demos
+# Source this file to set up paths for running C demos
+
+# Find project root (relative to this script)
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_PROJECT_ROOT="$(cd "$_SCRIPT_DIR/../../../.." && pwd)"
+
+# Find build directory (prefer release)
+_BUILD_DIR=""
+if [ -d "$_PROJECT_ROOT/build-desktop-ytrace-release" ]; then
+    _BUILD_DIR="$_PROJECT_ROOT/build-desktop-ytrace-release"
+elif [ -d "$_PROJECT_ROOT/build-desktop-yinfo-release" ]; then
+    _BUILD_DIR="$_PROJECT_ROOT/build-desktop-yinfo-release"
+elif [ -d "$_PROJECT_ROOT/build-desktop-ytrace-debug" ]; then
+    _BUILD_DIR="$_PROJECT_ROOT/build-desktop-ytrace-debug"
+else
+    echo "Error: No build directory found. Run 'make build-desktop-ytrace-release' first."
+    return 1
+fi
+
+# Demo executables directory
+DEMO_BIN="$_BUILD_DIR/demo/ygui-c/c"
+
+run_c_demo() {
+    local demo_dir="$1"
+    local demo_name="$2"
+    local exe="$DEMO_BIN/$demo_dir/$demo_name"
+
+    if [ ! -x "$exe" ]; then
+        echo "Error: Demo executable not found: $exe"
+        echo "Run 'make build-desktop-ytrace-release' first."
+        return 1
+    fi
+
+    # Run demo, stderr goes to terminal for debug output
+    "$exe"
+}

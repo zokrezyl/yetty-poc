@@ -1,0 +1,20 @@
+[package]
+name = "ygui"
+version = "0.1.0"
+edition = "2021"
+description = "Rust bindings for YGui-C widget library"
+license = "AGPL-3.0"
+repository = "https://github.com/zokrezyl/yetty"
+
+[lib]
+name = "ygui"
+path = "src/lib.rs"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.69"
+pkg-config = "0.3"
+
+[features]
+default = []

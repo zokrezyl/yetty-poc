@@ -1,0 +1,164 @@
+#pragma once
+
+#include <cstdint>
+
+namespace yetty::vnc {
+
+constexpr uint16_t DEFAULT_PORT = 5900;
+constexpr uint16_t TILE_SIZE = 64;
+
+enum class Encoding : uint8_t {
+    RAW = 0,
+    RLE = 1,
+    JPEG = 2,
+    FULL_FRAME = 3,  // Entire frame as one JPEG (tile_x=0, tile_y=0, covers whole frame)
+    RECT_RAW = 4,    // Arbitrary rectangle (uses RectHeader, raw pixels)
+    RECT_JPEG = 5,   // Arbitrary rectangle (uses RectHeader, JPEG compressed)
+    H264 = 6,        // H.264 encoded frame (full frame, uses VideoFrameHeader)
+};
+
+// Video frame header for H.264 encoded frames
+// Follows FrameHeader when encoding == H264
+struct VideoFrameHeader {
+    uint8_t frameType;   // 0 = IDR (keyframe), 1 = P-frame
+    uint8_t reserved[3];
+    uint32_t timestamp;  // Frame timestamp in ms (for playback sync)
+    uint32_t dataSize;   // Size of H.264 NAL data following this header
+};
+
+#pragma pack(push, 1)
+
+constexpr uint32_t FRAME_MAGIC = 0x594E4346;  // "YNCF" - Yetty VNC Frame
+
+struct FrameHeader {
+    uint32_t magic;      // FRAME_MAGIC for sync detection
+    uint16_t width;
+    uint16_t height;
+    uint16_t tile_size;
+    uint16_t num_tiles;
+};
+
+struct TileHeader {
+    uint16_t tile_x;
+    uint16_t tile_y;
+    uint8_t encoding;
+    uint32_t data_size;
+};
+
+// Rectangle header for merged tile regions (used with RECT_RAW/RECT_JPEG encoding)
+struct RectHeader {
+    uint16_t px_x;      // Pixel X coordinate
+    uint16_t px_y;      // Pixel Y coordinate
+    uint16_t width;     // Width in pixels
+    uint16_t height;    // Height in pixels
+    uint8_t encoding;   // RECT_RAW or RECT_JPEG
+    uint8_t reserved;
+    uint32_t data_size;
+};
+
+// Input event types (client -> server)
+enum class InputType : uint8_t {
+    MOUSE_MOVE = 0,
+    MOUSE_BUTTON = 1,
+    MOUSE_SCROLL = 2,
+    KEY_DOWN = 3,
+    KEY_UP = 4,
+    TEXT_INPUT = 5,
+    RESIZE = 6,      // Client window resized
+    CELL_SIZE = 7,   // Client sets cell height (ctrl+wheel zoom)
+    CHAR_WITH_MODS = 8,  // Character with modifiers (layout-mapped)
+    FRAME_ACK = 9,   // Client finished processing frame (flow control)
+    COMPRESSION_CONFIG = 10,  // Client configures compression settings
+};
+
+enum class MouseButton : uint8_t {
+    LEFT = 0,
+    MIDDLE = 1,
+    RIGHT = 2,
+};
+
+struct InputHeader {
+    uint8_t type;       // InputType
+    uint8_t reserved;
+    uint16_t data_size; // Size of following data
+};
+
+struct MouseMoveEvent {
+    int16_t x;
+    int16_t y;
+    uint8_t mods;       // Modifier flags (VNC_MOD_*)
+    uint8_t reserved;
+};
+
+struct MouseButtonEvent {
+    int16_t x;
+    int16_t y;
+    uint8_t button;     // MouseButton
+    uint8_t pressed;    // 1 = pressed, 0 = released
+    uint8_t mods;       // Modifier flags (VNC_MOD_*)
+    uint8_t reserved;
+};
+
+struct MouseScrollEvent {
+    int16_t x;
+    int16_t y;
+    int16_t delta_x;
+    int16_t delta_y;
+    uint8_t mods;       // Modifier flags (VNC_MOD_*)
+    uint8_t reserved;
+};
+
+struct KeyEvent {
+    uint32_t keycode;   // Platform keycode
+    uint32_t scancode;  // Hardware scancode
+    uint8_t mods;       // Modifier flags (shift, ctrl, alt, etc.)
+};
+
+// Modifier flags for KeyEvent.mods
+// Prefixed with VNC_ to avoid collision with Windows MOD_SHIFT/MOD_ALT macros
+constexpr uint8_t VNC_MOD_SHIFT = 0x01;
+constexpr uint8_t VNC_MOD_CTRL  = 0x02;
+constexpr uint8_t VNC_MOD_ALT   = 0x04;
+constexpr uint8_t VNC_MOD_SUPER = 0x08;
+
+// Character with modifiers (layout-mapped character, not raw keycode)
+struct CharWithModsEvent {
+    uint32_t codepoint;  // Unicode codepoint (layout-mapped)
+    uint8_t mods;        // Modifier flags
+};
+
+// Text input event - for unicode text (follows InputHeader, variable length UTF-8)
+
+struct ResizeEvent {
+    uint16_t width;    // New client window width
+    uint16_t height;   // New client window height
+};
+
+struct CellSizeEvent {
+    uint8_t cellHeight;  // Absolute cell height in pixels (client commands the size)
+};
+
+// Compression configuration (client -> server)
+struct CompressionConfigEvent {
+    uint8_t forceRaw;    // 1 = force raw encoding (no JPEG/H264), 0 = allow compression
+    uint8_t quality;     // JPEG quality (1-100), 0 = use server default
+    uint8_t alwaysFull;  // 1 = always send full frame (no delta), 0 = use delta encoding
+    uint8_t codec;       // 0 = JPEG (default), 1 = H.264
+};
+
+// Codec types for CompressionConfigEvent.codec
+constexpr uint8_t CODEC_JPEG = 0;
+constexpr uint8_t CODEC_H264 = 1;
+
+#pragma pack(pop)
+
+// Calculate tile grid dimensions
+inline uint16_t tiles_x(uint16_t width) {
+    return (width + TILE_SIZE - 1) / TILE_SIZE;
+}
+
+inline uint16_t tiles_y(uint16_t height) {
+    return (height + TILE_SIZE - 1) / TILE_SIZE;
+}
+
+} // namespace yetty::vnc

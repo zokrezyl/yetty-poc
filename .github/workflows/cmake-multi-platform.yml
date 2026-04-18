@@ -1,0 +1,795 @@
+# This starter workflow is for a CMake project running on multiple platforms. There is a different starter workflow if you just want a single platform.
+# See: https://github.com/actions/starter-workflows/blob/main/ci/cmake-single-platform.yml
+name: CMake on multiple platforms
+
+on:
+  push:
+    tags:
+      - '*'
+    branches:
+      - '**'
+
+
+# =============================================================================
+# BUILD FLAGS - Set to true to enable specific builds (tags always build all)
+# =============================================================================
+env:
+  BUILD_LINUX: false
+  BUILD_MACOS: false
+  BUILD_WINDOWS: false
+  BUILD_ANDROID: false
+  BUILD_ANDROID_X86_64: false
+  BUILD_IOS: false
+  BUILD_IOS_X86_64: true
+  BUILD_WEB: false
+
+  RUN_CODEQL: false
+  RUN_CODACY: false
+
+  TEST_ANDROID: true
+
+jobs:
+  # =============================================================================
+  # Read build flags (required because env context not available in job-level if)
+  # =============================================================================
+  read-flags:
+    runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.set.outputs.linux }}
+      macos: ${{ steps.set.outputs.macos }}
+      windows: ${{ steps.set.outputs.windows }}
+      android: ${{ steps.set.outputs.android }}
+      android_x86_64: ${{ steps.set.outputs.android_x86_64 }}
+      ios: ${{ steps.set.outputs.ios }}
+      ios_x86_64: ${{ steps.set.outputs.ios_x86_64 }}
+      web: ${{ steps.set.outputs.web }}
+      codeql: ${{ steps.set.outputs.codeql }}
+      codacy: ${{ steps.set.outputs.codacy }}
+      test_android: ${{ steps.set.outputs.test_android }}
+    steps:
+      - id: set
+        run: |
+          if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+            echo "linux=true" >> $GITHUB_OUTPUT
+            echo "macos=true" >> $GITHUB_OUTPUT
+            echo "windows=true" >> $GITHUB_OUTPUT
+            echo "android=true" >> $GITHUB_OUTPUT
+            echo "android_x86_64=true" >> $GITHUB_OUTPUT
+            echo "ios=true" >> $GITHUB_OUTPUT
+            echo "ios_x86_64=true" >> $GITHUB_OUTPUT
+            echo "web=true" >> $GITHUB_OUTPUT
+            echo "codeql=false" >> $GITHUB_OUTPUT
+            echo "codacy=false" >> $GITHUB_OUTPUT
+            echo "test_android=true" >> $GITHUB_OUTPUT
+          else
+            echo "linux=${{ env.BUILD_LINUX }}" >> $GITHUB_OUTPUT
+            echo "macos=${{ env.BUILD_MACOS }}" >> $GITHUB_OUTPUT
+            echo "windows=${{ env.BUILD_WINDOWS }}" >> $GITHUB_OUTPUT
+            echo "android=${{ env.BUILD_ANDROID }}" >> $GITHUB_OUTPUT
+            echo "android_x86_64=${{ env.BUILD_ANDROID_X86_64 }}" >> $GITHUB_OUTPUT
+            echo "ios=${{ env.BUILD_IOS }}" >> $GITHUB_OUTPUT
+            echo "ios_x86_64=${{ env.BUILD_IOS_X86_64 }}" >> $GITHUB_OUTPUT
+            echo "web=${{ env.BUILD_WEB }}" >> $GITHUB_OUTPUT
+            echo "codeql=${{ env.RUN_CODEQL }}" >> $GITHUB_OUTPUT
+            echo "codacy=${{ env.RUN_CODACY }}" >> $GITHUB_OUTPUT
+            echo "test_android=${{ env.TEST_ANDROID }}" >> $GITHUB_OUTPUT
+          fi
+
+
+  # =============================================================================
+  # Desktop Build (Linux)
+  # =============================================================================
+  build-desktop:
+    needs: read-flags
+    if: needs.read-flags.outputs.linux == 'true'
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        build_type: [Release]
+        c_compiler: [gcc]
+        include:
+          - os: ubuntu-latest
+            c_compiler: gcc
+            cpp_compiler: g++
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set reusable strings
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build-desktop" >> "$GITHUB_OUTPUT"
+
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          automake autoconf libtool \
+          meson ninja-build nasm \
+          brotli \
+          libfontconfig1-dev \
+          libxrandr-dev \
+          libxinerama-dev \
+          libxcursor-dev \
+          libxi-dev \
+          libxext-dev \
+          libx11-dev \
+          libgl1-mesa-dev \
+          libwayland-dev \
+          libxkbcommon-dev
+
+    - name: Configure CMake
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -S ${{ github.workspace }}
+
+    - name: Build
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
+
+    # - name: Test
+    #   working-directory: ${{ steps.strings.outputs.build-output-dir }}
+    #   run: ctest --build-config ${{ matrix.build_type }} --output-on-failure
+
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-linux
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc
+          ${{ steps.strings.outputs.build-output-dir }}/ycat
+          ${{ steps.strings.outputs.build-output-dir }}/yecho
+          demo/
+        if-no-files-found: warn
+        # Note: fonts and shaders are embedded via incbin, no need to include separately
+
+  # =============================================================================
+  # Desktop Build (macOS Intel)
+  # =============================================================================
+  build-macos:
+    needs: read-flags
+    if: needs.read-flags.outputs.macos == 'true'
+    runs-on: macos-15-intel
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set reusable strings
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build-macos" >> "$GITHUB_OUTPUT"
+
+    - name: Install macOS dependencies
+      run: brew install automake autoconf libtool meson ninja nasm brotli
+
+    - name: Configure CMake
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DCMAKE_BUILD_TYPE=Release
+        -S ${{ github.workspace }}
+
+    - name: Build
+      # Limit parallelism to avoid "posix_spawn failed: Resource temporarily unavailable"
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel 4
+
+    # - name: Test
+    #   working-directory: ${{ steps.strings.outputs.build-output-dir }}
+    #   run: ctest --build-config Release --output-on-failure
+
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-macos
+        path: |
+          ${{ steps.strings.outputs.build-output-dir }}/yetty
+          ${{ steps.strings.outputs.build-output-dir }}/yettyc
+          ${{ steps.strings.outputs.build-output-dir }}/ycat
+          ${{ steps.strings.outputs.build-output-dir }}/yecho
+          demo/
+        if-no-files-found: warn
+        # Note: fonts and shaders are embedded via incbin, no need to include separately
+
+  # =============================================================================
+  # Desktop Build (Windows)
+  # =============================================================================
+  build-windows:
+    needs: read-flags
+    if: needs.read-flags.outputs.windows == 'true'
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set reusable strings
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build-windows-dawn-release" >> "$GITHUB_OUTPUT"
+
+    - name: Install Windows build dependencies
+      shell: bash
+      run: |
+        choco install nasm -y
+        choco install make -y
+        pip install meson
+        # Note: brotli not available in chocolatey; build will use uncompressed assets
+        # (incbin.cmake gracefully falls back to uncompressed when brotli not found)
+
+    - name: Configure CMake
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DCMAKE_BUILD_TYPE=Release
+        -DWEBGPU_BACKEND=dawn
+        -S ${{ github.workspace }}
+
+    - name: Build
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel
+
+    # - name: Test
+    #   working-directory: ${{ steps.strings.outputs.build-output-dir }}
+    #   run: ctest --build-config Release --output-on-failure
+
+    - name: Stage Windows runtime
+      shell: pwsh
+      run: |
+        $BuildDir = "${{ steps.strings.outputs.build-output-dir }}"
+        $StageDir = "${{ github.workspace }}/yetty-windows"
+        New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+
+        # MSVC generator places executables in Release/, Ninja places them at root
+        $ExeDir = if (Test-Path "$BuildDir/Release/yetty.exe") { "$BuildDir/Release" } else { $BuildDir }
+        Write-Host "Exe directory: $ExeDir"
+
+        # Copy executables
+        Get-ChildItem "$ExeDir/*.exe" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $StageDir
+
+        # Copy DLLs that cmake POST_BUILD placed next to the executable
+        Get-ChildItem "$ExeDir/*.dll" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $StageDir
+
+        # If dxil.dll or d3dcompiler_47.dll are missing, find them in Windows SDK
+        foreach ($DllName in @("dxil.dll", "d3dcompiler_47.dll")) {
+            if (-not (Test-Path "$StageDir/$DllName")) {
+                Write-Host "$DllName not found next to exe, searching Windows SDK..."
+                # Search in known locations: bin/<version>/x64 and Redist/<version>/x64
+                $SearchDirs = @(
+                    Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '^\d+\.' } |
+                        ForEach-Object { "$($_.FullName)\x64" }
+                    "C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x64"
+                    Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Redist" -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '^\d+\.' } |
+                        ForEach-Object { "$($_.FullName)\x64" }
+                )
+                $Found = $SearchDirs |
+                    Where-Object { Test-Path "$_/$DllName" } |
+                    Sort-Object -Descending |
+                    Select-Object -First 1
+                if ($Found) {
+                    Write-Host "  Found: $Found/$DllName"
+                    Copy-Item "$Found/$DllName" -Destination "$StageDir/$DllName"
+                } else {
+                    Write-Warning "  Could not find $DllName in Windows SDK"
+                }
+            }
+        }
+
+        # Note: fonts and shaders are embedded via incbin, no need to copy assets/
+
+        # Copy demo content
+        if (Test-Path "${{ github.workspace }}/demo") {
+            Copy-Item "${{ github.workspace }}/demo" -Destination $StageDir -Recurse -Force
+        }
+
+        # Report staged contents
+        Write-Host "=== Staged Windows runtime ==="
+        Get-ChildItem -Recurse $StageDir | Select-Object -ExpandProperty FullName
+
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-windows
+        path: ${{ github.workspace }}/yetty-windows/
+        if-no-files-found: warn
+
+  # =============================================================================
+  # Android Build
+  # =============================================================================
+  build-android:
+    needs: read-flags
+    if: needs.read-flags.outputs.android == 'true'
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android-ytrace-release
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: Create debug keystore
+      run: |
+        mkdir -p ~/.android
+        keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+          -storepass android -alias androiddebugkey -keypass android \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+
+    - name: Build Android APK
+      run: nix develop .#android --command make build-android-ytrace-release
+
+    - name: Upload Android APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-android-apk
+        path: ${{ env.ANDROID_BUILD_DIR }}/app/outputs/apk/release/*.apk
+        if-no-files-found: warn
+
+  # =============================================================================
+  # Android x86_64 Build (for Emulator Testing)
+  # =============================================================================
+  build-android-x86_64:
+    needs: read-flags
+    if: needs.read-flags.outputs.android_x86_64 == 'true'
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_BUILD_DIR: ${{ github.workspace }}/build-android_x86_64-ytrace-release
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: Create debug keystore
+      run: |
+        mkdir -p ~/.android
+        keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+          -storepass android -alias androiddebugkey -keypass android \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+
+    - name: Build Android x86_64 APK
+      run: nix develop .#android --command make build-android_x86_64-ytrace-release
+
+    - name: Upload Android x86_64 APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-android-x86_64-apk
+        path: ${{ env.ANDROID_BUILD_DIR }}/app/outputs/apk/release/*.apk
+        if-no-files-found: warn
+
+  # =============================================================================
+  # Android Instrumented Tests (on Emulator)
+  # =============================================================================
+  test-android:
+    needs: [read-flags, build-android-x86_64]
+    if: needs.read-flags.outputs.test_android == 'true' && needs.build-android-x86_64.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download Android x86_64 APK
+      uses: actions/download-artifact@v4
+      with:
+        name: yetty-android-x86_64-apk
+        path: apk
+
+    - name: List APK files
+      run: ls -la apk/
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Run Android Emulator Tests
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 30
+        target: google_apis
+        arch: x86_64
+        profile: Nexus 6
+        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+        disable-animations: true
+        script: |
+          # Install the release APK (signed with debug key)
+          adb install apk/app-release.apk
+          # Basic smoke test - launch and check if it starts
+          adb shell am start -n com.yetty.terminal/android.app.NativeActivity
+          sleep 10
+          # Check if the app is running
+          adb shell pidof com.yetty.terminal || echo "App may have crashed"
+          # Capture logcat for debugging (500 lines should capture init + runtime)
+          echo "=== YETTY LOGS ==="
+          adb logcat -d | grep -i yetty | tail -500
+          echo "=== WEBGPU/VULKAN LOGS ==="
+          adb logcat -d | grep -iE "vulkan|webgpu|dawn|wgpu|adapter|backend" | tail -100
+
+  # =============================================================================
+  # iOS Build (arm64 device)
+  # =============================================================================
+  build-ios:
+    needs: read-flags
+    if: needs.read-flags.outputs.ios == 'true'
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set reusable strings
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build-ios-ytrace-release" >> "$GITHUB_OUTPUT"
+
+    - name: Install macOS dependencies
+      run: brew install automake autoconf libtool ninja nasm brotli meson
+
+    - name: Configure CMake for iOS
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -G Ninja
+        -DCMAKE_SYSTEM_NAME=iOS
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+        -DCMAKE_BUILD_TYPE=Release
+        -DYETTY_IOS=ON
+        -S ${{ github.workspace }}
+
+    - name: Build
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel 4
+
+    - name: Upload iOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-ios
+        path: ${{ steps.strings.outputs.build-output-dir }}/yetty.app
+        if-no-files-found: warn
+
+  # =============================================================================
+  # iOS x86_64 Build (for Simulator)
+  # =============================================================================
+  build-ios-x86_64:
+    needs: read-flags
+    if: needs.read-flags.outputs.ios_x86_64 == 'true'
+    runs-on: macos-15-intel
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set reusable strings
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build-ios_x86_64-ytrace-release" >> "$GITHUB_OUTPUT"
+
+    - name: Install macOS dependencies
+      run: brew install automake autoconf libtool ninja nasm brotli meson
+
+    - name: Configure CMake for iOS Simulator
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -G Ninja
+        -DCMAKE_SYSTEM_NAME=iOS
+        -DCMAKE_OSX_ARCHITECTURES=x86_64
+        -DCMAKE_OSX_SYSROOT=iphonesimulator
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+        -DCMAKE_BUILD_TYPE=Release
+        -DYETTY_IOS=ON
+        -S ${{ github.workspace }}
+
+    - name: Build
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config Release --parallel 4
+
+    - name: Upload iOS Simulator artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-ios-x86_64
+        path: ${{ steps.strings.outputs.build-output-dir }}/yetty.app
+        if-no-files-found: warn
+
+  # =============================================================================
+  # WebAssembly Build (using nix for deterministic builds)
+  # =============================================================================
+  build-webasm:
+    needs: read-flags
+    if: needs.read-flags.outputs.web == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: Build WebAssembly with Nix
+      run: |
+        nix develop .#web --command make build-webasm-ytrace-release
+
+    - name: Prepare site directory
+      run: |
+        mkdir -p site
+        cp build-webasm-ytrace-release/index.html site/
+        cp build-webasm-ytrace-release/yetty.js site/
+        cp build-webasm-ytrace-release/yetty.wasm site/
+        cp build-webasm-ytrace-release/yetty.data site/
+        cp -r build-webasm-ytrace-release/jslinux site/
+        cp -r build-webasm-ytrace-release/vfsync site/
+        ls -la site/
+        ls -la site/vfsync/u/os/yetty-alpine/ || echo "vfsync structure check"
+
+    - name: Upload WebAssembly artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: yetty-webasm
+        path: site/
+        if-no-files-found: error
+
+  # =============================================================================
+  # Deploy to GitHub Pages
+  # =============================================================================
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs: [read-flags, build-webasm]
+    if: |
+      always() &&
+      needs.build-webasm.result == 'success' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+    - name: Download WebAssembly artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: yetty-webasm
+        path: site
+
+    - name: List site contents
+      run: |
+        echo "=== Site structure ==="
+        ls -la site/
+        echo "=== jslinux directory ==="
+        ls -la site/jslinux/ || echo "jslinux not found"
+        echo "=== vfsync directory ==="
+        ls -la site/vfsync/u/os/yetty-alpine/ || echo "vfsync not found"
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: site
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+
+  # =============================================================================
+  # Upload to GitHub Release (per-platform, independent)
+  # =============================================================================
+  release-linux:
+    runs-on: ubuntu-latest
+    needs: build-desktop
+    if: needs.build-desktop.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-linux
+        path: yetty-linux
+    - name: Create archive
+      run: tar -czvf yetty-linux.tar.gz -C yetty-linux .
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: yetty-linux.tar.gz
+
+  release-macos:
+    runs-on: ubuntu-latest
+    needs: build-macos
+    if: needs.build-macos.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-macos
+        path: yetty-macos
+    - name: Create archive
+      run: tar -czvf yetty-macos.tar.gz -C yetty-macos .
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: yetty-macos.tar.gz
+
+  release-windows:
+    runs-on: ubuntu-latest
+    needs: build-windows
+    if: needs.build-windows.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-windows
+        path: yetty-windows
+    - name: Create archive
+      run: zip -r yetty-windows.zip yetty-windows
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: yetty-windows.zip
+
+  release-webasm:
+    runs-on: ubuntu-latest
+    needs: build-webasm
+    if: needs.build-webasm.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-webasm
+        path: yetty-webasm
+    - name: Create archive
+      run: zip -r yetty-webasm.zip yetty-webasm
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: yetty-webasm.zip
+
+  release-android:
+    runs-on: ubuntu-latest
+    needs: build-android
+    if: needs.build-android.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-android-apk
+        path: apk
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: apk/*.apk
+
+  release-ios:
+    runs-on: ubuntu-latest
+    needs: build-ios
+    if: needs.build-ios.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-ios
+        path: yetty-ios
+    - name: Create archive
+      run: zip -r yetty-ios.zip yetty-ios
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: yetty-ios.zip
+
+  release-ios-x86_64:
+    runs-on: ubuntu-latest
+    needs: build-ios-x86_64
+    if: needs.build-ios-x86_64.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: yetty-ios-x86_64
+        path: yetty-ios-x86_64
+    - name: Create archive
+      run: zip -r yetty-ios-x86_64.zip yetty-ios-x86_64
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: yetty-ios-x86_64.zip
+
+  # =============================================================================
+  # CodeQL Security Analysis
+  # =============================================================================
+  codeql:
+    needs: read-flags
+    if: needs.read-flags.outputs.codeql == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: actions
+          build-mode: none
+        - language: c-cpp
+          build-mode: autobuild
+    steps:
+    - uses: actions/checkout@v4
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{ matrix.language }}"
+
+  # =============================================================================
+  # Codacy Security Scan
+  # =============================================================================
+  codacy:
+    needs: read-flags
+    if: needs.read-flags.outputs.codacy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run Codacy Analysis CLI
+      uses: codacy/codacy-analysis-cli-action@d840f886c4bd4edc059706d09c6a1586111c540b
+      with:
+        project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        verbose: true
+        output: results.sarif
+        format: sarif
+        gh-code-scanning-compat: true
+        max-allowed-issues: 2147483647
+    - name: Check SARIF file
+      id: sarif-check
+      run: |
+        if [ -f results.sarif ]; then
+          runs=$(jq '.runs | length' results.sarif 2>/dev/null || echo "0")
+          if [ "$runs" -gt 0 ]; then
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_results=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "has_results=false" >> $GITHUB_OUTPUT
+        fi
+    - name: Upload SARIF results
+      if: steps.sarif-check.outputs.has_results == 'true'
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: results.sarif

@@ -1,0 +1,255 @@
+#pragma once
+
+#include "protocol.h"
+#include <yetty/result.hpp>
+#include <yetty/base/event-listener.h>
+#include <yetty/base/event-queue.h>
+#if YETTY_HAS_YVIDEO
+#include <yetty/yvideo/yvideo-encoder.h>
+#endif
+#include <webgpu/webgpu.h>
+#include <string>
+#include <vector>
+#include <atomic>
+#include <mutex>
+#include <functional>
+#include <unordered_map>
+
+namespace yetty::vnc {
+
+class VncServer : public base::EventListener {
+public:
+    VncServer(WGPUDevice device, WGPUQueue queue);
+    ~VncServer();
+
+    // Start listening on port
+    Result<void> start(uint16_t port);
+    void stop();
+    bool isRunning() const { return _running; }
+    bool hasClients() const { return _clientCount > 0; }
+    bool isAwaitingAck() const { return _awaitingAck; }  // Flow control: waiting for client
+    void forceFullFrame() { _forceFullFrame = true; }
+
+    // Enable/disable rectangle merging (merges adjacent dirty tiles into larger rectangles)
+    void setMergeRectangles(bool enable) { _mergeRectangles = enable; }
+    bool getMergeRectangles() const { return _mergeRectangles; }
+
+    // Compression settings (can be configured by client via COMPRESSION_CONFIG message)
+    void setForceRaw(bool enable) { _forceRaw = enable; }
+    bool getForceRaw() const { return _forceRaw; }
+    void setJpegQuality(uint8_t quality) { _jpegQuality = quality; }
+    uint8_t getJpegQuality() const { return _jpegQuality; }
+    void setAlwaysFullFrame(bool enable) { _alwaysFullFrame = enable; }
+    bool getAlwaysFullFrame() const { return _alwaysFullFrame; }
+
+    // H.264 encoding (alternative to JPEG)
+    void setUseH264(bool enable);
+    bool getUseH264() const { return _useH264; }
+#if YETTY_HAS_YVIDEO
+    void forceH264IDR() { if (_h264Encoder) _h264Encoder->forceIDR(); }
+#else
+    void forceH264IDR() {}
+#endif
+
+    // Check if server is ready to accept more frames (previous GPU work done)
+    // Call this BEFORE creating GPU command buffers to avoid FD exhaustion
+    bool isReadyForFrame() const;
+
+    // Statistics (updated per second)
+    struct FrameStats {
+        uint32_t tilesSent = 0;
+        uint32_t tilesJpeg = 0;
+        uint32_t tilesRaw = 0;
+        uint32_t avgTileSize = 0;
+        uint32_t fullUpdates = 0;
+        uint32_t frames = 0;
+        uint64_t bytesPerSec = 0;
+    };
+    FrameStats getStats() const;
+
+    // Capture current frame and send to all clients
+    // texture: current frame on GPU (for diff detection)
+    // cpuPixels: same frame in CPU memory (for JPEG encoding), or nullptr to read back from GPU
+    Result<void> sendFrame(WGPUTexture texture, const uint8_t* cpuPixels, uint32_t width, uint32_t height);
+
+    // Overload for GPU-only rendering (will read back dirty tiles for encoding)
+    Result<void> sendFrame(WGPUTexture texture, uint32_t width, uint32_t height) {
+        return sendFrame(texture, nullptr, width, height);
+    }
+
+    // Poll for incoming input events (call from main thread)
+    // Returns true if there are pending events
+    bool hasPendingInput() const;
+
+    // Input event callbacks (set these to receive input from clients)
+    std::function<void(int16_t x, int16_t y, uint8_t mods)> onMouseMove;
+    std::function<void(int16_t x, int16_t y, MouseButton button, bool pressed, uint8_t mods)> onMouseButton;
+    std::function<void(int16_t x, int16_t y, int16_t dx, int16_t dy, uint8_t mods)> onMouseScroll;
+    std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyDown;
+    std::function<void(uint32_t keycode, uint32_t scancode, uint8_t mods)> onKeyUp;
+    std::function<void(const std::string& text)> onTextInput;
+    std::function<void(uint16_t width, uint16_t height)> onResize;
+    std::function<void(uint8_t cellHeight)> onCellSize;
+    std::function<void(uint32_t codepoint, uint8_t mods)> onCharWithMods;
+    std::function<void()> onInputReceived;  // Called after any input event (for triggering refresh)
+
+    // EventListener interface - handles async I/O from client sockets
+    Result<bool> onEvent(const base::Event& event) override;
+
+    // Process all pending input events (call from main thread) - legacy, prefer async
+    void processInput();
+
+private:
+    // Register/unregister client FD with EventLoop for async I/O
+    Result<void> registerClientPoll(int clientFd);
+    void unregisterClientPoll(int clientFd);
+    void handleAccept();  // Called when server socket is readable
+    Result<void> sendToClient(int clientFd, const void* data, size_t size);
+
+    WGPUDevice _device;
+    WGPUQueue _queue;
+    base::EventQueue::Ptr _eventQueue;  // Thread-safe event queue for GPU callbacks
+
+    // Server socket
+    int _serverFd = -1;
+    int _serverPollId = -1;  // EventLoop poll ID for async accept
+    uint16_t _port = 0;
+    std::atomic<bool> _running{false};
+
+    // Connected clients
+    std::mutex _clientsMutex;
+    std::vector<int> _clients;
+    std::atomic<int> _clientCount{0};
+
+    // Async I/O: poll ID per client FD
+    std::unordered_map<int, int> _clientPollIds;  // fd -> pollId
+    std::unordered_map<int, int> _pollIdToFd;     // pollId -> fd (reverse lookup)
+
+    // Frame dimensions
+    uint32_t _lastWidth = 0;
+    uint32_t _lastHeight = 0;
+
+    // GPU tile diff resources
+    WGPUTexture _prevTexture = nullptr;      // Previous frame for comparison
+    WGPUBuffer _dirtyFlagsBuffer = nullptr;  // Output: 1 uint per tile (dirty=1, clean=0)
+    WGPUBuffer _dirtyFlagsReadback = nullptr; // CPU-readable copy
+    WGPUComputePipeline _diffPipeline = nullptr;
+    WGPUBindGroup _diffBindGroup = nullptr;
+    WGPUBindGroupLayout _diffBindGroupLayout = nullptr;
+
+    // CPU framebuffer for encoding (passed in from caller or read back from GPU)
+    const uint8_t* _cpuPixels = nullptr;
+    uint32_t _cpuPixelsSize = 0;
+    std::vector<uint8_t> _gpuReadbackPixels;  // For GPU-only rendering
+    WGPUBuffer _tileReadbackBuffer = nullptr;
+    uint32_t _tileReadbackBufferSize = 0;
+
+    // Async state machine for non-blocking GPU operations
+    enum class CaptureState {
+        IDLE,                  // Ready to start new frame
+        WAITING_CLEAR,         // Waiting for buffer clear
+        WAITING_COMPUTE,       // Waiting for compute shader + copy
+        WAITING_MAP,           // Waiting for buffer map
+        READY_TO_SEND,         // Results ready, encode and send
+        WAITING_TILE_READBACK  // Waiting for GPU tile readback
+    };
+    CaptureState _captureState = CaptureState::IDLE;
+    std::atomic<bool> _gpuWorkDone{false};
+    WGPUMapAsyncStatus _mapStatus = WGPUMapAsyncStatus_Success;
+
+    // libuv async handle for GPU callback wakeup (void* to avoid uv.h in header)
+
+    // Pending texture for async processing
+    WGPUTexture _pendingTexture = nullptr;
+
+    // Full frame refresh
+    std::atomic<bool> _forceFullFrame{true};  // Start with full frame
+    uint32_t _framesSinceFullRefresh = 0;
+    static constexpr uint32_t FULL_REFRESH_INTERVAL = 300;  // Every 300 frames (~5 sec at 60fps)
+
+    // JPEG compression
+    void* _jpegCompressor = nullptr;
+
+    // Dirty tile tracking
+    std::vector<bool> _dirtyTiles;
+    uint16_t _tilesX = 0;
+    uint16_t _tilesY = 0;
+
+    // Rectangle merging mode (default: disabled for backward compatibility)
+    bool _mergeRectangles = false;
+
+    // Compression settings (configurable by client)
+    bool _forceRaw = false;      // Force raw encoding (no JPEG)
+    uint8_t _jpegQuality = 80;   // JPEG quality (1-100), default 80
+    bool _alwaysFullFrame = false;  // Always send full frame (no delta encoding)
+
+    // H.264 encoding
+    bool _useH264 = false;       // Use H.264 instead of JPEG
+#if YETTY_HAS_YVIDEO
+    yvideo::Encoder::Ptr _h264Encoder;
+    std::vector<uint8_t> _yuvBuffer;  // YUV420 buffer for H.264 encoding
+    uint32_t _yuvYStride = 0;
+    uint32_t _yuvUVStride = 0;
+#endif
+
+    // BGRA->YUV420 GPU conversion resources
+    WGPUComputePipeline _bgraToYuvPipeline = nullptr;
+    WGPUBindGroup _bgraToYuvBindGroup = nullptr;
+    WGPUBindGroupLayout _bgraToYuvBindGroupLayout = nullptr;
+    WGPUBuffer _yuvOutputBuffer = nullptr;
+    WGPUBuffer _yuvParamsBuffer = nullptr;
+    Result<void> createBgraToYuvPipeline();
+    Result<void> convertBgraToYuv(WGPUTexture texture, uint32_t width, uint32_t height);
+
+    // Flow control: wait for client ack before sending next frame
+    std::atomic<bool> _awaitingAck{false};
+
+    Result<void> ensureResources(uint32_t width, uint32_t height);
+    Result<void> createDiffPipeline();
+    Result<void> encodeTile(uint16_t tx, uint16_t ty, std::vector<uint8_t>& outData, Encoding& outEncoding);
+    Result<void> encodeRect(uint16_t px, uint16_t py, uint16_t width, uint16_t height,
+                            std::vector<uint8_t>& outData, Encoding& outEncoding);
+
+    // Rectangle merging: find maximal rectangles covering dirty tiles
+    struct Rect { uint16_t x, y, w, h; };
+    std::vector<Rect> mergeRectangles();
+
+    // Input receiving (non-blocking, called from main thread)
+    void pollClientInput(int clientFd);
+    void dispatchInput(const InputHeader& hdr, const uint8_t* data);
+
+    // Per-client input buffer for partial reads
+    struct ClientInputBuffer {
+        std::vector<uint8_t> buffer;
+        size_t needed = sizeof(InputHeader);
+        bool readingHeader = true;
+        InputHeader header;
+    };
+    std::unordered_map<int, ClientInputBuffer> _clientInputBuffers;
+
+    // Per-client send queue for async writes
+    struct ClientSendBuffer {
+        std::vector<uint8_t> queue;
+        size_t offset = 0;
+    };
+    std::unordered_map<int, ClientSendBuffer> _clientSendBuffers;
+    void drainClientSendQueue(int clientFd);
+    void updateClientPollEvents(int clientFd);
+
+    // Statistics tracking (per second)
+    struct Stats {
+        uint32_t tilesSent = 0;
+        uint32_t tilesJpeg = 0;
+        uint32_t tilesRaw = 0;
+        uint64_t bytesSent = 0;
+        uint64_t bytesJpeg = 0;
+        uint64_t bytesRaw = 0;
+        uint32_t fullUpdates = 0;
+        uint32_t frames = 0;
+        double lastReportTime = 0;
+    };
+    Stats _stats;
+    FrameStats _lastStats;  // Last reported stats for public access
+};
+
+} // namespace yetty::vnc
