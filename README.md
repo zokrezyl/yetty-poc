@@ -22,6 +22,21 @@ Traditional terminals are stuck in the 1970s. They can display text, maybe some 
 
 ## What Makes Yetty Different
 
+### Render drawing primitives using gpu sdf simple but powerfull primitives
+
+### Render text spans using msdf fonts directly in GPU
+
+### Based on above features libraries for rendering pdf, markdown, ygui
+
+### Layered based rendering meaning different gpu rendering approaches can coexist
+
+- **Classical Text** - This is the foundamental layer that makes yetty behave like a normal text terminal
+- **Shader glyphs** - Animated glyphs rendered directly in gpu. By default the terminal is triggering a frame rendering only if needed. Animation obiously needs several FPS to render, but the CPU/GPU consumption is minimum
+- **Ypaint** - This is the foundation for rich text and graphical output
+- **Ymgui** - This is a backend to render Imgui applications remotely
+- **Flutter** - Planned Flutter remote backend
+- **Qt** - Planned modern Qt implementation remote backend
+
 ### Card-Based Rendering System
 
 Yetty introduces **Cards** - rich content widgets that live within the terminal grid and scroll with your content, just like text. Cards can display anything:
